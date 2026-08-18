@@ -1,0 +1,75 @@
+radar:
+  timezone: Australia/Perth
+  report_language: zh-CN
+  top_trends: 5
+  must_reads_per_trend: 2
+  database: data/radar.db
+  output_dir: reports
+  lookback_days: 30
+
+collectors:
+  arxiv:
+    enabled: true
+    categories: [cs.CL, cs.LG, cs.AI]
+    # Add cs.CV when vision and multimodal work is a priority.
+    max_results: 250
+  huggingface:
+    enabled: true
+    limit: 100
+  github_trending:
+    enabled: true
+    languages: [python]
+    since: daily
+  github_releases:
+    enabled: true
+    repositories:
+      - vllm-project/vllm
+      - sgl-project/sglang
+      - ggerganov/llama.cpp
+      - pytorch/ao
+      - huggingface/transformers
+  rss:
+    enabled: true
+    feeds:
+      - name: PyTorch Blog
+        url: https://pytorch.org/blog/feed/
+      - name: Hugging Face Blog
+        url: https://huggingface.co/blog/feed.xml
+      - name: NVIDIA Developer AI
+        url: https://developer.nvidia.com/blog/tag/generative-ai/feed/
+
+embedding:
+  # gemini gives stronger semantic clusters. Use local for zero-cost/offline runs.
+  provider: gemini
+  model: gemini-embedding-001
+  dimensions: 768
+  batch_size: 32
+  cache: true
+
+llm:
+  # Gemini is used for final trend naming, ranking and summarization.
+  provider: gemini
+  model: gemini-2.5-flash
+  fallback: heuristic
+  candidate_trends: 8
+
+clustering:
+  algorithm: dbscan
+  eps: 0.32
+  min_samples: 2
+
+preferences:
+  keywords:
+    llm: 1.6
+    inference: 2.0
+    serving: 2.0
+    quantization: 2.0
+    kv cache: 2.2
+    gpu kernel: 2.0
+    distributed inference: 2.1
+    training efficiency: 1.8
+    moe: 1.8
+    speculative decoding: 2.2
+    agent: 1.5
+    reinforcement learning: 1.3
+    multimodal: 1.1

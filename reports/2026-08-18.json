@@ -1,0 +1,166 @@
+{
+  "date": "2026-08-18",
+  "generated_at": "2026-08-18T04:00:00+00:00",
+  "trends": [
+    {
+      "label": "Agent Infrastructure",
+      "score": 34.1912,
+      "velocity": 18.7907,
+      "count_7d": 73,
+      "count_30d": 82,
+      "source_count": 5,
+      "summary": "近 7 天出现 73 条相关信号，覆盖 5 类来源，相对过去 30 天基线呈快速升温。",
+      "why_it_matters": "最新代表性信号“LycheeMemory V2: Efficient Long-Term Memory for LLM Agents via Semantic Segment-Level Consolidation”显示该方向正从研究想法向可复用能力演进。",
+      "must_reads": [
+        {
+          "title": "LycheeMemory V2: Efficient Long-Term Memory for LLM Agents via Semantic Segment-Level Consolidation",
+          "url": "https://huggingface.co/papers/2608.12990",
+          "source": "Hugging Face Papers",
+          "method_explanation": {
+            "purpose": "Long-horizon LLM agents must preserve information from past interactions to support future tasks.",
+            "approach": "Existing memory systems typically rely on eager consolidation, invoking LLMs after each interaction to extract, summarize, or update memories.",
+            "difference": "This design makes memory construction increasingly costly as conversations grow."
+          }
+        },
+        {
+          "title": "AutoDesign: Meta-Harness Optimization for Long-Horizon Agentic Design",
+          "url": "https://huggingface.co/papers/2608.13560",
+          "source": "Hugging Face Papers",
+          "method_explanation": {
+            "purpose": "Transforming multimodal sources into condensed and structured media outputs can be fundamentally conceptualized as a long-horizon agentic process centered on a model-harness system.",
+            "approach": "While an ideal harness system should align with human design priors and accumulate reusable experience through empirical exploration to drive recursive self-improvement, existing paradigms remain static and fall short of this capability.",
+            "difference": "In this paper, we present AutoDesign, a framework that aligns with human design priors, where a meta-harness optimizer guides a code agent to recursively improve harness based on rollout feedback."
+          }
+        }
+      ]
+    },
+    {
+      "label": "LLM Serving & Inference",
+      "score": 33.8204,
+      "velocity": 10.5,
+      "count_7d": 63,
+      "count_30d": 78,
+      "source_count": 6,
+      "summary": "近 7 天出现 63 条相关信号，覆盖 6 类来源，相对过去 30 天基线呈快速升温。",
+      "why_it_matters": "最新代表性信号“LLMRouter: Unified Infrastructure for Developing, Evaluating, and Deploying LLM Routers”显示该方向正从研究想法向可复用能力演进。",
+      "must_reads": [
+        {
+          "title": "LLMRouter: Unified Infrastructure for Developing, Evaluating, and Deploying LLM Routers",
+          "url": "https://huggingface.co/papers/2608.06867",
+          "source": "Hugging Face Papers",
+          "method_explanation": {
+            "purpose": "No single large language model (LLM) is optimal across all queries and budget constraints, making model routing essential for cost-effective deployment.",
+            "approach": "Existing routers adopt diverse formulations and implementations, making fair comparison and extension difficult.",
+            "difference": "We present a unified formulation of LLM routing as a sequential decision process characterized by five components: context encoders, model encoders, scoring functions, decision rules, and learning signals, covering single-turn, multi-turn, and personalized rou"
+          }
+        },
+        {
+          "title": "MegaParts: Scaling Part-Aware 3D Object Generation to 300 Parts via Token-Efficient Autoregressive Modeling",
+          "url": "https://huggingface.co/papers/2608.14783",
+          "source": "Hugging Face Papers",
+          "method_explanation": {
+            "purpose": "Part-aware 3D object generation is essential for graphics applications such as controllable modeling, editing, and articulation, where objects are represented as coherent assemblies of semantic parts.",
+            "approach": "However, existing part-aware generation methods, do not scale well to highly complex objects.",
+            "difference": "As the number of parts increases, generating detailed geometry becomes prohibitively expensive in token length and memory."
+          }
+        }
+      ]
+    },
+    {
+      "label": "Reasoning & RL",
+      "score": 25.7076,
+      "velocity": 12.4167,
+      "count_7d": 41,
+      "count_30d": 48,
+      "source_count": 2,
+      "summary": "近 7 天出现 41 条相关信号，覆盖 2 类来源，相对过去 30 天基线呈快速升温。",
+      "why_it_matters": "最新代表性信号“Learning How the World Evolves: Extrapolative Video World Models via Latent Dynamics Reasoning”显示该方向正从研究想法向可复用能力演进。",
+      "must_reads": [
+        {
+          "title": "Learning How the World Evolves: Extrapolative Video World Models via Latent Dynamics Reasoning",
+          "url": "https://huggingface.co/papers/2608.09926",
+          "source": "Hugging Face Papers",
+          "method_explanation": {
+            "purpose": "The world evolves following its dynamics, i.e., its laws of motion.",
+            "approach": "However, leading video diffusion models largely fit the pixels without modeling how the pixels transit over time.",
+            "difference": "Thus, they render visually plausible frames but may not accurately obey the laws."
+          }
+        },
+        {
+          "title": "SimpleOPD: Simple Tokenizer-Agnostic On-Policy Distillation for Long-Context Reasoning",
+          "url": "https://huggingface.co/papers/2608.14277",
+          "source": "Hugging Face Papers",
+          "method_explanation": {
+            "purpose": "On-policy distillation (OPD) offers a promising way to transfer reasoning capabilities from stronger teacher models, but applying it to long-context reasoning teachers and short-context students introduces practical challenges, including tokenizer mismatch, te",
+            "approach": "In this work, we study this setting by transferring proof-reasoning capabilities from the long-context reasoning model SU-01 to short-context student models.",
+            "difference": "To handle tokenizer differences, we perform OPD in a shared text space and align only tokens that occupy identical text spans under the student and teacher tokenizers."
+          }
+        }
+      ]
+    },
+    {
+      "label": "Multimodal Models",
+      "score": 20.5488,
+      "velocity": 16.6333,
+      "count_7d": 22,
+      "count_30d": 23,
+      "source_count": 2,
+      "summary": "近 7 天出现 22 条相关信号，覆盖 2 类来源，相对过去 30 天基线呈快速升温。",
+      "why_it_matters": "最新代表性信号“Can We Defend Against AI-Generated Video Attacks on Real-World Crisis Events? A Systematic Evaluation of Detectors, Generators and Social Dissemination”显示该方向正从研究想法向可复用能力演进。",
+      "must_reads": [
+        {
+          "title": "Can We Defend Against AI-Generated Video Attacks on Real-World Crisis Events? A Systematic Evaluation of Detectors, Generators and Social Dissemination",
+          "url": "https://huggingface.co/papers/2608.14391",
+          "source": "Hugging Face Papers",
+          "method_explanation": {
+            "purpose": "Recent video generators can fabricate realistic depictions of wars, disasters, public emergencies, and other real-world crises, creating substantial risks of misinformation.",
+            "approach": "Existing benchmarks, however, provide limited evidence on detector and generator behavior in such settings, including how detectability varies with generation conditions, how people perceive generated videos, and whether detectors remain reliable during social dissemination.",
+            "difference": "To address this gap, we introduce RA-Bench, a benchmark for AI-generated video detection that uses Real videos as Anchors."
+          }
+        },
+        {
+          "title": "VibeWorlding: Can Multimodal Agents Construct 3D Open Worlds End-to-End?",
+          "url": "https://huggingface.co/papers/2608.15265",
+          "source": "Hugging Face Papers",
+          "method_explanation": {
+            "purpose": "Constructing an interactive 3D open world from a user query is important.",
+            "approach": "However, existing methods are primarily evaluated on idealized, simple queries, making it difficult to systematically analyze and compare how multimodal agents understand user intent, use 3D tools, and reason over textual and visual 3D world information.",
+            "difference": "To this end, we propose VibeWorlding, a unified framework for benchmarking and training vibe worlding agents: a multimodal agent that can autonomously infer user intent, plan scene layout, invoke 3D tools, and reflect on the multimodal feedback in a multi-turn"
+          }
+        }
+      ]
+    },
+    {
+      "label": "Quantization & Compression",
+      "score": 17.5833,
+      "velocity": 4.5946,
+      "count_7d": 8,
+      "count_30d": 10,
+      "source_count": 4,
+      "summary": "近 7 天出现 8 条相关信号，覆盖 4 类来源，相对过去 30 天基线呈快速升温。",
+      "why_it_matters": "最新代表性信号“QuestKV: Query-aware KV Cache Quantization”显示该方向正从研究想法向可复用能力演进。",
+      "must_reads": [
+        {
+          "title": "QuestKV: Query-aware KV Cache Quantization",
+          "url": "https://example.com/12/questkv:-query-aware-kv-cache-quantization",
+          "source": "Hugging Face Papers",
+          "method_explanation": {
+            "purpose": "Low-bit KV cache compression preserves long-context quality.",
+            "approach": "Low-bit KV cache compression preserves long-context quality.",
+            "difference": "摘要未明确说明它与既有方法的差异。"
+          }
+        },
+        {
+          "title": "ReRound: Reconstructive Rounding to Resolve Midpoint Ambiguity in Calibration-Free LLM Quantization",
+          "url": "https://huggingface.co/papers/2608.11045",
+          "source": "Hugging Face Papers",
+          "method_explanation": {
+            "purpose": "ReRound (Reconstructive Rounding) is a post-training quantization method that addresses the midpoint ambiguity inherent in standard round-to-nearest (RTN) schemes when quantizing weights near the centers of quantization intervals.",
+            "approach": "Starting from a pretrained LLM, ReRound trains a conditional diffusion model to produce continuous reconstructions of low-bit weights for the LLM.",
+            "difference": "These reconstructed weights act as a guidance signal to disambiguate the rounding direction of weights located close to interval midpoints."
+          }
+        }
+      ]
+    }
+  ]
+}
