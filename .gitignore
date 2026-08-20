@@ -6,4 +6,10 @@ __pycache__/
 .pytest_cache/
 *.pyc
 data/*.db
+data/*.db.bak-*
+data/audio-cache/
 reports/*.md
+reports/sample/
+reports/*.mp3
+
+*.json

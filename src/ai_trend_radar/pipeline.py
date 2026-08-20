@@ -1,19 +1,26 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import json
+import re
+from copy import deepcopy
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
+from zoneinfo import ZoneInfo
 
+from .audio import make_tts_provider, synthesize_episode
 from .collectors import collect_all, deduplicate
-from .models import Item
+from .models import Item, SpeechScript
 from .providers import (
     CachedEmbeddingProvider,
     HeuristicNarrator,
+    HeuristicSpeechWriter,
     LocalEmbeddingProvider,
     make_embedding_provider,
     make_narrator,
+    make_speech_writer,
 )
-from .report import render_markdown, write_reports
+from .report import render_markdown, write_reports, write_speech_script
 from .sample import SAMPLE_AS_OF, sample_items
 from .storage import Store
 from .trends import detect_trends
@@ -24,11 +31,16 @@ def run_pipeline(
     sample: bool = False,
     progress: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
+    config = deepcopy(config)
     notify = progress or (lambda _: None)
     warnings: list[str] = []
     as_of = SAMPLE_AS_OF if sample else datetime.now(timezone.utc)
+    if sample:
+        database = Path(config["radar"]["database"])
+        config["radar"]["database"] = str(database.with_name(f"{database.stem}-sample{database.suffix}"))
+        config["radar"]["output_dir"] = str(Path(config["radar"]["output_dir"]) / "sample")
     fresh_items: list[Item]
-    notify("[1/6] 准备采集数据源")
+    notify("[1/8] 准备采集数据源")
     if sample:
         notify("正在载入内置离线样例…")
         fresh_items = sample_items()
@@ -37,15 +49,16 @@ def run_pipeline(
         fresh_items, collector_warnings = collect_all(config, progress=notify)
         warnings.extend(collector_warnings)
 
-    notify("[2/6] 正在更新 SQLite 历史库")
+    notify("[2/8] 正在更新 SQLite 历史库")
     store = Store(config["radar"]["database"])
     cache_hits = 0
     cache_misses = 0
     try:
         stored_count = store.upsert(deduplicate(fresh_items))
         items = store.recent(as_of, int(config["radar"].get("lookback_days", 30)))
+        _mark_item_context(items, as_of, config["radar"])
         notify(f"历史库完成：本次写入 {stored_count} 条，30 天窗口 {len(items)} 条")
-        notify("[3/6] 准备 embedding 与主题聚类")
+        notify("[3/8] 准备 embedding 与主题聚类")
         if sample:
             embeddings = LocalEmbeddingProvider()
             notify("离线样例使用本地 HashingVectorizer")
@@ -75,7 +88,7 @@ def run_pipeline(
     top_n = int(config["radar"].get("top_trends", 5))
     candidate_limit = max(top_n, int(config.get("llm", {}).get("candidate_trends", 8)))
     trends = trends[:candidate_limit]
-    notify(f"[4/6] 正在为 {len(trends)} 个候选生成趋势名称、排序、摘要和必读方法概览")
+    notify(f"[4/8] 正在为 {len(trends)} 个候选生成趋势名称、排序、摘要和必读方法概览")
     if sample:
         narrator = HeuristicNarrator()
         notify("离线样例使用启发式摘要")
@@ -96,8 +109,97 @@ def run_pipeline(
             trends, config["radar"].get("report_language", "zh-CN")
         )
     notify("摘要与排序完成")
-    trends = trends[: max(3, min(5, top_n))]
-    notify("[5/6] 正在渲染 Markdown 与 JSON")
+    trends = _select_unique_labels(trends, max(3, min(5, top_n)))
+    speech_path: Path | None = None
+    speech: SpeechScript | None = None
+    speech_config = config.get("speech", {})
+    if speech_config.get("enabled", True):
+        target_minutes = max(5, min(30, int(speech_config.get("target_minutes", 15))))
+        notify(f"[5/8] 正在生成约 {target_minutes} 分钟的每日口播稿")
+        if sample:
+            speech_writer = HeuristicSpeechWriter()
+            notify("离线样例使用本地口播稿生成器")
+        else:
+            try:
+                speech_writer = make_speech_writer(config)
+                notify(f"口播稿 provider：{speech_writer.__class__.__name__}")
+            except Exception as exc:
+                warnings.append(f"Gemini 口播稿降级为本地：{type(exc).__name__}: {exc}")
+                notify(f"Gemini 口播稿不可用，改用本地生成：{type(exc).__name__}")
+                speech_writer = HeuristicSpeechWriter()
+        report_date = (
+            as_of.astimezone(ZoneInfo(config["radar"].get("timezone", "UTC")))
+            .date()
+            .isoformat()
+        )
+        try:
+            speech = speech_writer.write(
+                trends,
+                config["radar"].get("report_language", "zh-CN"),
+                target_minutes,
+                report_date,
+            )
+        except Exception as exc:
+            warnings.append(f"口播稿生成失败，已降级为本地：{type(exc).__name__}: {exc}")
+            notify(f"口播稿请求失败，正在使用本地生成：{type(exc).__name__}: {exc}")
+            speech = HeuristicSpeechWriter().write(
+                trends,
+                config["radar"].get("report_language", "zh-CN"),
+                target_minutes,
+                report_date,
+            )
+        speech_path = write_speech_script(
+            config["radar"]["output_dir"],
+            speech,
+            as_of,
+            config["radar"].get("timezone", "UTC"),
+        )
+        notify(f"口播稿完成：{speech_path.name}")
+    else:
+        notify("[5/8] 口播稿已在配置中关闭")
+
+    audio_path: Path | None = None
+    audio_stats = {"chunks": 0, "cache_hits": 0, "cache_misses": 0}
+    audio_config = config.get("audio", {})
+    if sample:
+        notify("[6/8] 离线样例跳过音频合成")
+    elif not audio_config.get("enabled", False):
+        notify("[6/8] 音频合成已在配置中关闭")
+    elif speech is None:
+        warnings.append("音频合成已跳过：口播稿未启用或未生成")
+        notify("[6/8] 音频合成已跳过：没有口播稿")
+    else:
+        notify("[6/8] 准备分段合成音频并拼接 MP3")
+        try:
+            tts_provider = make_tts_provider(config)
+            notify(f"TTS provider：{tts_provider.__class__.__name__}")
+            local_date = as_of.astimezone(
+                ZoneInfo(config["radar"].get("timezone", "UTC"))
+            ).date().isoformat()
+            target_audio_path = Path(config["radar"]["output_dir"]) / f"{local_date}.mp3"
+            audio_stats = synthesize_episode(
+                speech.content,
+                target_audio_path,
+                tts_provider,
+                Path(audio_config.get("cache_dir", "data/audio-cache")),
+                style=audio_config.get(
+                    "style",
+                    "语速平稳、清晰、自然，像专业科技播客主播；英文缩写逐字母清楚发音。",
+                ),
+                chunk_chars=int(audio_config.get("chunk_chars", 700)),
+                pause_ms=int(audio_config.get("pause_ms", 450)),
+                bitrate=audio_config.get("bitrate", "128k"),
+                cache_days=int(audio_config.get("cache_days", 14)),
+                progress=notify,
+            )
+            audio_path = target_audio_path
+            notify(f"MP3 完成：{audio_path.name}（{audio_stats['chunks']} 段）")
+        except Exception as exc:
+            audio_path = None
+            warnings.append(f"音频合成失败，文本报告不受影响：{type(exc).__name__}: {exc}")
+            notify(f"音频合成失败，继续输出文本报告：{type(exc).__name__}: {exc}")
+
+    notify("[7/8] 正在渲染 Markdown 与 JSON")
     markdown = render_markdown(
         trends,
         as_of,
@@ -108,7 +210,7 @@ def run_pipeline(
     markdown_path, json_path = write_reports(
         config["radar"]["output_dir"], markdown, trends, as_of, config["radar"].get("timezone", "UTC")
     )
-    notify(f"[6/6] 完成：已写入 {markdown_path.name} 和 {json_path.name}")
+    notify(f"[8/8] 完成：已写入 {markdown_path.name} 和 {json_path.name}")
     return {
         "collected": stored_count,
         "history_items": len(items),
@@ -118,4 +220,63 @@ def run_pipeline(
         "embedding_cache_misses": cache_misses,
         "markdown_path": Path(markdown_path),
         "json_path": Path(json_path),
+        "speech_path": Path(speech_path) if speech_path else None,
+        "audio_path": Path(audio_path) if audio_path else None,
+        "audio_chunks": audio_stats["chunks"],
+        "audio_cache_hits": audio_stats["cache_hits"],
+        "audio_cache_misses": audio_stats["cache_misses"],
     }
+
+
+def _mark_item_context(items: list[Item], as_of: datetime, radar_config: dict[str, Any]) -> None:
+    timezone_name = radar_config.get("timezone", "UTC")
+    local_date = as_of.astimezone(ZoneInfo(timezone_name)).date()
+    recent_urls = _recent_recommended_urls(
+        Path(radar_config["output_dir"]), local_date, int(radar_config.get("recommendation_cooldown_days", 3))
+    )
+    for item in items:
+        first_seen = item.metadata.get("first_seen_at")
+        if first_seen:
+            try:
+                seen_at = datetime.fromisoformat(str(first_seen).replace("Z", "+00:00"))
+                item.metadata["is_new_today"] = seen_at.astimezone(ZoneInfo(timezone_name)).date() == local_date
+            except ValueError:
+                item.metadata["is_new_today"] = False
+        else:
+            item.metadata["is_new_today"] = False
+        item.metadata["recently_recommended"] = item.url in recent_urls
+
+
+def _recent_recommended_urls(output_dir: Path, current_date, days: int) -> set[str]:
+    urls: set[str] = set()
+    for offset in range(1, days + 1):
+        date = current_date - timedelta(days=offset)
+        json_path = output_dir / f"{date.isoformat()}.json"
+        if json_path.exists():
+            try:
+                payload = json.loads(json_path.read_text(encoding="utf-8"))
+                for trend in payload.get("trends", []):
+                    urls.update(item.get("url", "") for item in trend.get("must_reads", []))
+            except (json.JSONDecodeError, OSError):
+                pass
+        markdown_path = output_dir / f"{date.isoformat()}.md"
+        if markdown_path.exists():
+            urls.update(
+                re.findall(r"^- \[[^]]+\]\(([^)]+)\)", markdown_path.read_text(encoding="utf-8"), re.MULTILINE)
+            )
+    urls.discard("")
+    return urls
+
+
+def _select_unique_labels(trends, limit: int):
+    selected = []
+    labels: set[str] = set()
+    for trend in trends:
+        normalized = re.sub(r"\W+", " ", trend.label.casefold()).strip()
+        if normalized in labels:
+            continue
+        labels.add(normalized)
+        selected.append(trend)
+        if len(selected) >= limit:
+            break
+    return selected

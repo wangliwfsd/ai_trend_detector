@@ -1,0 +1,83 @@
+import json
+from datetime import datetime, timezone
+from types import SimpleNamespace
+
+from ai_trend_radar.models import Item, Trend
+from ai_trend_radar.providers import GeminiSpeechWriter
+
+
+class FakeModels:
+    def __init__(self):
+        self.calls = 0
+
+    def generate_content(self, **kwargs):
+        self.calls += 1
+        script = "太短" if self.calls == 1 else "详" * 3600
+        return SimpleNamespace(text=json.dumps({"title": "今日 AI 趋势", "script": script}))
+
+
+class InvalidJSONThenValidModels:
+    def __init__(self):
+        self.calls = 0
+
+    def generate_content(self, **kwargs):
+        self.calls += 1
+        if self.calls == 1:
+            return SimpleNamespace(text='{"title":"今日 AI 趋势","script":"未结束')
+        return SimpleNamespace(
+            text=json.dumps({"title": "今日 AI 趋势", "script": "详" * 3600})
+        )
+
+
+def test_gemini_speech_writer_retries_when_first_draft_is_too_short():
+    item = Item(
+        uid="paper:1",
+        source="arXiv",
+        kind="paper",
+        title="Efficient Serving",
+        url="https://example.com/paper",
+        published_at=datetime.now(timezone.utc),
+        summary="A grounded abstract.",
+        metadata={
+            "method_explanation": {
+                "purpose": "Reduce serving cost.",
+                "approach": "Reuse cached states.",
+                "difference": "Avoid recomputation.",
+            }
+        },
+    )
+    trend = Trend(1, "LLM Serving", 3.0, 0.5, 2, 5, 2, [item])
+    writer = GeminiSpeechWriter.__new__(GeminiSpeechWriter)
+    models = FakeModels()
+    writer.client = SimpleNamespace(models=models)
+    writer.types = SimpleNamespace(GenerateContentConfig=lambda **kwargs: kwargs)
+    writer.model = "fake-gemini"
+
+    result = writer.write([trend], "zh-CN", 15, "2026-08-20")
+
+    assert models.calls == 2
+    assert len(result.content) == 3600
+    assert result.provider == "gemini"
+
+
+def test_gemini_speech_writer_retries_invalid_json():
+    item = Item(
+        uid="paper:2",
+        source="arXiv",
+        kind="paper",
+        title="Reliable Agents",
+        url="https://example.com/agent",
+        published_at=datetime.now(timezone.utc),
+        summary="A grounded abstract.",
+    )
+    trend = Trend(2, "Agent Infrastructure", 2.0, 0.2, 2, 4, 1, [item])
+    writer = GeminiSpeechWriter.__new__(GeminiSpeechWriter)
+    models = InvalidJSONThenValidModels()
+    writer.client = SimpleNamespace(models=models)
+    writer.types = SimpleNamespace(GenerateContentConfig=lambda **kwargs: kwargs)
+    writer.model = "fake-gemini"
+
+    result = writer.write([trend], "zh-CN", 15, "2026-08-20")
+
+    assert models.calls == 2
+    assert len(result.content) == 3600

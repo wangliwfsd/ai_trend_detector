@@ -12,7 +12,7 @@ permissions:
 jobs:
   radar:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
@@ -24,12 +24,17 @@ jobs:
       - name: Restore rolling history
         uses: actions/cache/restore@v4
         with:
-          path: data/radar.db
+          path: |
+            data/radar.db
+            data/audio-cache
           key: radar-db-${{ github.run_id }}
           restore-keys: radar-db-
 
       - name: Install
-        run: pip install -e '.[gemini]'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          pip install -e '.[gemini]'
 
       - name: Build radar
         env:
@@ -41,7 +46,9 @@ jobs:
         if: always()
         uses: actions/cache/save@v4
         with:
-          path: data/radar.db
+          path: |
+            data/radar.db
+            data/audio-cache
           key: radar-db-${{ github.run_id }}
 
       - name: Upload reports
@@ -52,4 +59,3 @@ jobs:
           path: reports/
           if-no-files-found: warn
           retention-days: 30
-

@@ -144,7 +144,7 @@ def collect_github_trending(client: httpx.Client, config: dict[str, Any]) -> lis
             metric = _first_number(stars_today.get_text(" ") if stars_today else "")
             result.append(
                 Item(
-                    uid=f"github-trending:{now.date()}:{repo}",
+                    uid=f"github-trending:{repo}",
                     source="GitHub Trending",
                     kind="repository",
                     title=repo,

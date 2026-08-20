@@ -6,6 +6,7 @@ radar:
   database: data/radar.db
   output_dir: reports
   lookback_days: 30
+  recommendation_cooldown_days: 3
 
 collectors:
   arxiv:
@@ -52,6 +53,33 @@ llm:
   model: gemini-2.5-flash
   fallback: heuristic
   candidate_trends: 8
+
+speech:
+  enabled: true
+  # Uses one dedicated Gemini request after the final 3–5 trends are selected.
+  provider: same_as_llm
+  model: gemini-2.5-flash
+  target_minutes: 15
+
+audio:
+  enabled: true
+  provider: gemini
+  model: gemini-3.1-flash-tts-preview
+  voice: Charon
+  style: 语速平稳、清晰、自然，像专业科技播客主播；英文缩写逐字母清楚发音。
+  chunk_chars: 700
+  pause_ms: 450
+  bitrate: 128k
+  retries: 3
+  cache_dir: data/audio-cache
+  cache_days: 14
+  # To use a local OpenAI-compatible TTS server instead:
+  # provider: local_http
+  # base_url: http://127.0.0.1:8880
+  # model: tts-1
+  # voice: default
+  # speed: 1.0
+  # timeout_seconds: 300
 
 clustering:
   algorithm: dbscan

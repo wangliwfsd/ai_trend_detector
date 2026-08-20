@@ -19,7 +19,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-gemini = ["google-genai>=1.0,<2"]
+gemini = ["google-genai>=2.0,<3"]
 dev = ["pytest>=8,<9"]
 
 [project.scripts]
@@ -31,4 +31,3 @@ packages = ["src/ai_trend_radar"]
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
-

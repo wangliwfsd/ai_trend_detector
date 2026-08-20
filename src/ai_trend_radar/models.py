@@ -44,6 +44,14 @@ class Trend:
     count_30d: int
     source_count: int
     items: list[Item]
+    new_count: int = 0
     summary: str = ""
     why_it_matters: str = ""
 
+
+@dataclass(slots=True)
+class SpeechScript:
+    title: str
+    content: str
+    estimated_minutes: int = 15
+    provider: str = "heuristic"

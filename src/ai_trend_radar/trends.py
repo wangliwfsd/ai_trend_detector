@@ -72,6 +72,7 @@ def _score_cluster(cluster_id: int, items: list[Item], as_of: datetime, preferen
     prior_weekly_rate = prior_count * 7 / 23
     velocity = (count_7d + 1) / (prior_weekly_rate + 1) - 1
     source_count = len({item.source for item in items})
+    new_count = sum(bool(item.metadata.get("is_new_today")) for item in items)
     combined = " ".join(item.text().lower() for item in items)
     preference_score = sum(weight for keyword, weight in preferences.items() if keyword in combined)
     attention = sum(math.log1p(sum(item.metrics.values())) for item in items)
@@ -82,6 +83,7 @@ def _score_cluster(cluster_id: int, items: list[Item], as_of: datetime, preferen
         + 0.8 * math.log1p(source_count)
         + 0.35 * preference_score
         + 0.12 * attention
+        + 1.0 * math.log1p(new_count)
     )
     ranked_items = sorted(items, key=lambda item: _item_quality(item, as_of), reverse=True)
     return Trend(
@@ -93,6 +95,7 @@ def _score_cluster(cluster_id: int, items: list[Item], as_of: datetime, preferen
         count_30d=count_30d,
         source_count=source_count,
         items=ranked_items,
+        new_count=new_count,
     )
 
 
@@ -113,5 +116,13 @@ def _item_quality(item: Item, as_of: datetime) -> float:
     source_weight = {"Hugging Face Papers": 1.4, "GitHub Releases": 1.3, "GitHub Trending": 1.2}.get(item.source, 1.0)
     metric_score = math.log1p(sum(item.metrics.values()))
     cross_signal = len(item.metadata.get("signals", []))
-    return source_weight + metric_score + 0.5 * cross_signal - 0.03 * age_days
-
+    novelty_bonus = 5.0 if item.metadata.get("is_new_today") else 0.0
+    repeat_penalty = 8.0 if item.metadata.get("recently_recommended") else 0.0
+    return (
+        source_weight
+        + metric_score
+        + 0.5 * cross_signal
+        + novelty_bonus
+        - repeat_penalty
+        - 0.03 * age_days
+    )

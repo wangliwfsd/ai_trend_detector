@@ -23,6 +23,14 @@ def test_sample_pipeline_runs_without_network_or_api_key(tmp_path: Path, monkeyp
     assert "怎么做" in report
     assert "有什么不同" in report
     assert result["json_path"].exists()
+    assert result["speech_path"].exists()
+    assert result["audio_path"] is None
+    speech = result["speech_path"].read_text()
+    assert "目标时长：约 15 分钟" in speech
+    assert "必读信号" in speech
+    assert not (tmp_path / "radar.db").exists()
+    assert (tmp_path / "radar-sample.db").exists()
+    assert result["markdown_path"].parent.name == "sample"
 
 
 class QuotaExhaustedProvider(EmbeddingProvider):
