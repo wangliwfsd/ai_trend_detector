@@ -14,6 +14,10 @@ from ai_trend_radar.audio import (
     GeminiTTSProvider,
     PCMChunk,
     TTSProvider,
+    make_tts_provider,
+    resolve_audio_chunk_chars,
+    resolve_audio_language,
+    resolve_audio_style,
     split_for_tts,
     synthesize_episode,
 )
@@ -48,6 +52,19 @@ def test_split_for_tts_keeps_content_and_respects_limit():
     assert len(chunks) > 2
     assert all(len(value) <= 120 for value in chunks)
     assert "".join(chunks).replace("\n", "") == text.replace("\n", "")
+
+
+def test_split_for_tts_handles_english_sentences_without_tiny_tail():
+    text = " ".join(
+        f"Sentence {index} explains a technical result with enough supporting context."
+        for index in range(45)
+    )
+
+    chunks = split_for_tts(text, max_chars=360)
+
+    assert all(len(value) <= 360 for value in chunks)
+    assert len(chunks[-1]) >= 72
+    assert "".join(chunks).replace("\n", "").replace(" ", "") == text.replace(" ", "")
 
 
 def test_audio_chunks_are_cached(tmp_path: Path, monkeypatch):
@@ -149,6 +166,7 @@ def test_gemini_provider_decodes_pcm_audio():
         def create(self, **kwargs):
             assert kwargs["response_format"] == {"type": "audio"}
             assert kwargs["generation_config"]["speech_config"] == [{"voice": "Charon"}]
+            assert "single-speaker English" in kwargs["input"]
             return SimpleNamespace(
                 output_audio=SimpleNamespace(data=base64.b64encode(pcm).decode("ascii"))
             )
@@ -158,11 +176,36 @@ def test_gemini_provider_decodes_pcm_audio():
     provider.model = "fake-tts"
     provider.voice = "Charon"
     provider.retries = 1
+    provider.language = "en-US"
 
     result = provider.synthesize("你好", "平稳")
 
     assert result.data == pcm
     assert result.sample_rate == 24_000
+
+
+def test_audio_language_selects_local_voice_and_style():
+    config = {
+        "radar": {"report_language": "zh-CN"},
+        "audio": {
+            "language": "en-US",
+            "provider": "local_http",
+            "base_url": "http://tts.local",
+            "model": "kokoro",
+            "voices": {"zh-CN": "zf_xiaoxiao", "en-US": "af_heart"},
+            "styles": {"zh-CN": "中文风格", "en-US": "English style"},
+        },
+    }
+
+    provider = make_tts_provider(config)
+
+    assert isinstance(provider, LocalHTTPProvider)
+    assert provider.language == "en-US"
+    assert provider.voice == "af_heart"
+    assert resolve_audio_language(config) == "en-US"
+    assert resolve_audio_style(config) == "English style"
+    config["audio"]["chunk_chars_by_language"] = {"zh-CN": 700, "en-US": 1800}
+    assert resolve_audio_chunk_chars(config) == 1800
 
 
 def test_gemini_provider_does_not_retry_non_transient_400():

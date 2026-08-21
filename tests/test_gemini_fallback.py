@@ -80,3 +80,22 @@ def test_model_pool_shares_per_model_concurrency_limit_across_instances():
 
     assert results == ["shared"] * 6
     assert maximum == 2
+
+
+def test_model_pool_reports_each_retry_and_model_switch(monkeypatch):
+    messages = []
+    calls = []
+
+    def operation(model):
+        calls.append(model)
+        if model == "busy":
+            raise RuntimeError("503 UNAVAILABLE: high demand")
+        return "ok"
+
+    monkeypatch.setattr("ai_trend_radar.gemini_utils.time.sleep", lambda _: None)
+    pool = QuotaAwareModelPool(["busy", "backup"], transient_retries=1)
+
+    assert pool.call(operation, progress=messages.append) == "ok"
+    assert calls == ["busy", "busy", "backup"]
+    assert any("第 1/2 次请求失败" in message and "1 秒后重试" in message for message in messages)
+    assert any("连续 2 次失败" in message and "切换下一模型" in message for message in messages)

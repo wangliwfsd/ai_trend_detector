@@ -1,5 +1,6 @@
 radar:
   timezone: Australia/Perth
+  # Supported: zh-CN or en-US. Controls summaries, deep reads, report, and script.
   report_language: zh-CN
   top_trends: 5
   must_reads_per_trend: 2
@@ -80,24 +81,29 @@ speech:
 
 audio:
   enabled: true
+  # same_as_report, zh-CN, or en-US. This may differ from report_language.
+  language: same_as_report
   provider: fallback
   providers:
     - provider: gemini
       model: gemini-3.1-flash-tts-preview
-      voice: Charon
+      voices: {zh-CN: Charon, en-US: Charon}
       retries: 3
     - provider: gemini
       model: gemini-2.5-flash-preview-tts
-      voice: Charon
+      voices: {zh-CN: Charon, en-US: Charon}
       retries: 3
     - provider: local_http
       base_url: http://127.0.0.1:8880
       model: kokoro
-      voice: zf_xiaoxiao
+      voices: {zh-CN: zf_xiaoxiao, en-US: af_heart}
       speed: 1.0
       timeout_seconds: 300
-  style: 语速平稳、清晰、自然，像专业科技播客主播；英文缩写逐字母清楚发音。
-  chunk_chars: 700
+  styles:
+    zh-CN: 语速平稳、清晰、自然，像专业科技播客主播；英文缩写逐字母清楚发音。
+    en-US: Calm, clear, natural delivery in the style of a professional technology podcast.
+  # Keep each segment around 2–3 minutes while avoiding excessive TTS requests.
+  chunk_chars_by_language: {zh-CN: 700, en-US: 1800}
   pause_ms: 450
   bitrate: 128k
   cache_dir: data/audio-cache
@@ -109,7 +115,7 @@ audio:
   # provider: local_http
   # base_url: http://127.0.0.1:8880
   # model: kokoro
-  # voice: zf_xiaoxiao
+  # voices: {zh-CN: zf_xiaoxiao, en-US: af_heart}
   # speed: 1.0
   # timeout_seconds: 300
   # max_workers: 2

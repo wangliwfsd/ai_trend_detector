@@ -8,7 +8,14 @@ from pathlib import Path
 from typing import Any, Callable
 from zoneinfo import ZoneInfo
 
-from .audio import make_tts_provider, synthesize_episode
+from .audio import (
+    make_tts_provider,
+    normalize_language,
+    resolve_audio_chunk_chars,
+    resolve_audio_language,
+    resolve_audio_style,
+    synthesize_episode,
+)
 from .collectors import collect_all, deduplicate
 from .deep_reading import enrich_must_reads
 from .models import Item, SpeechScript
@@ -33,6 +40,11 @@ def run_pipeline(
     progress: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     config = deepcopy(config)
+    config["radar"]["report_language"] = normalize_language(
+        config["radar"].get("report_language", "zh-CN")
+    )
+    # Validate the independently configurable speech/audio language before any API calls.
+    resolve_audio_language(config)
     notify = progress or (lambda _: None)
     warnings: list[str] = []
     as_of = SAMPLE_AS_OF if sample else datetime.now(timezone.utc)
@@ -146,7 +158,11 @@ def run_pipeline(
     speech_config = config.get("speech", {})
     if speech_config.get("enabled", True):
         target_minutes = max(5, min(30, int(speech_config.get("target_minutes", 15))))
-        notify(f"[6/9] 正在基于原文分析生成约 {target_minutes} 分钟的每日口播稿")
+        speech_language = resolve_audio_language(config)
+        notify(
+            f"[6/9] 正在基于原文分析生成约 {target_minutes} 分钟的每日口播稿"
+            f"（{speech_language}）"
+        )
         if sample:
             speech_writer = HeuristicSpeechWriter()
             notify("离线样例使用本地口播稿生成器")
@@ -166,7 +182,7 @@ def run_pipeline(
         try:
             speech = speech_writer.write(
                 trends,
-                config["radar"].get("report_language", "zh-CN"),
+                speech_language,
                 target_minutes,
                 report_date,
             )
@@ -175,7 +191,7 @@ def run_pipeline(
             notify(f"口播稿请求失败，正在使用本地生成：{type(exc).__name__}: {exc}")
             speech = HeuristicSpeechWriter().write(
                 trends,
-                config["radar"].get("report_language", "zh-CN"),
+                speech_language,
                 target_minutes,
                 report_date,
             )
@@ -184,6 +200,7 @@ def run_pipeline(
             speech,
             as_of,
             config["radar"].get("timezone", "UTC"),
+            speech_language,
         )
         if hasattr(speech_writer, "model"):
             notify(f"口播稿实际模型：{speech_writer.model}")
@@ -206,6 +223,7 @@ def run_pipeline(
         try:
             tts_provider = make_tts_provider(config)
             notify(f"TTS provider：{tts_provider.__class__.__name__}")
+            notify(f"TTS language：{resolve_audio_language(config)}")
             if hasattr(tts_provider, "active"):
                 notify(f"TTS 首选模型：{tts_provider.active.namespace}")
             local_date = as_of.astimezone(
@@ -217,11 +235,8 @@ def run_pipeline(
                 target_audio_path,
                 tts_provider,
                 Path(audio_config.get("cache_dir", "data/audio-cache")),
-                style=audio_config.get(
-                    "style",
-                    "语速平稳、清晰、自然，像专业科技播客主播；英文缩写逐字母清楚发音。",
-                ),
-                chunk_chars=int(audio_config.get("chunk_chars", 700)),
+                style=resolve_audio_style(config),
+                chunk_chars=resolve_audio_chunk_chars(config),
                 pause_ms=int(audio_config.get("pause_ms", 450)),
                 bitrate=audio_config.get("bitrate", "128k"),
                 cache_days=int(audio_config.get("cache_days", 14)),
@@ -242,6 +257,7 @@ def run_pipeline(
         config["radar"].get("timezone", "UTC"),
         must_reads,
         warnings,
+        config["radar"].get("report_language", "zh-CN"),
     )
     markdown_path, json_path = write_reports(
         config["radar"]["output_dir"],
@@ -250,6 +266,7 @@ def run_pipeline(
         as_of,
         config["radar"].get("timezone", "UTC"),
         must_reads,
+        config["radar"].get("report_language", "zh-CN"),
     )
     notify(f"[9/9] 完成：已写入 {markdown_path.name} 和 {json_path.name}")
     return {

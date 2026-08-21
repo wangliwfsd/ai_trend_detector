@@ -51,3 +51,39 @@ def test_runtime_embedding_error_falls_back_to_local(tmp_path: Path, monkeypatch
     result = run_pipeline(config, sample=False)
     assert result["trends"] >= 3
     assert any("429 RESOURCE_EXHAUSTED" in warning for warning in result["warnings"])
+
+
+def test_sample_pipeline_supports_english_report_and_audio_script(tmp_path: Path, monkeypatch):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    config = yaml.safe_load(Path("config.example.yaml").read_text())
+    config["radar"]["database"] = str(tmp_path / "radar.db")
+    config["radar"]["output_dir"] = str(tmp_path / "reports")
+    config["radar"]["report_language"] = "en-US"
+    config["audio"]["language"] = "same_as_report"
+
+    result = run_pipeline(config, sample=True)
+    report = result["markdown_path"].read_text(encoding="utf-8")
+    speech = result["speech_path"].read_text(encoding="utf-8")
+
+    assert "7/30-day signals" in report
+    assert "**Must-read:**" in report
+    assert "**Purpose:**" in report
+    assert "Target duration: about 15 minutes" in speech
+    assert "Must-read signal" in speech
+
+
+def test_audio_language_can_differ_from_report_language(tmp_path: Path, monkeypatch):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    config = yaml.safe_load(Path("config.example.yaml").read_text())
+    config["radar"]["database"] = str(tmp_path / "radar.db")
+    config["radar"]["output_dir"] = str(tmp_path / "reports")
+    config["radar"]["report_language"] = "zh-CN"
+    config["audio"]["language"] = "en-US"
+
+    result = run_pipeline(config, sample=True)
+    report = result["markdown_path"].read_text(encoding="utf-8")
+    speech = result["speech_path"].read_text(encoding="utf-8")
+
+    assert "**必读：**" in report
+    assert "Target duration: about 15 minutes" in speech
+    assert "Hello, and welcome to the AI Trend Radar" in speech

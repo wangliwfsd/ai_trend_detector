@@ -71,10 +71,16 @@ class QuotaAwareModelPool:
             else None
         )
 
-    def call(self, operation: Callable[[str], T]) -> T:
+    def call(
+        self,
+        operation: Callable[[str], T],
+        progress: Callable[[str], None] | None = None,
+    ) -> T:
+        notify = progress or (lambda _: None)
         model_errors: list[str] = []
         for model in self.models:
             if _model_is_blocked(model):
+                notify(f"跳过已熔断模型 {model}")
                 continue
             for attempt in range(self.transient_retries + 1):
                 limiter = self._limiter(model)
@@ -92,14 +98,31 @@ class QuotaAwareModelPool:
                     if is_quota_exhausted(exc):
                         _mark_model(_EXHAUSTED_MODELS, model)
                         model_errors.append(f"{model} quota: {exc}")
+                        notify(
+                            f"{model} 第 {attempt + 1}/{self.transient_retries + 1} 次请求遇到配额限制："
+                            f"{_short_error(exc)}；切换下一模型"
+                        )
                         break
                     if not is_transient_server_error(exc):
+                        notify(
+                            f"{model} 请求失败且不可重试：{type(exc).__name__}: "
+                            f"{_short_error(exc)}"
+                        )
                         raise
                     if attempt < self.transient_retries:
-                        time.sleep(2**attempt)
+                        delay = 2**attempt
+                        notify(
+                            f"{model} 第 {attempt + 1}/{self.transient_retries + 1} 次请求失败："
+                            f"{type(exc).__name__}: {_short_error(exc)}；{delay} 秒后重试"
+                        )
+                        time.sleep(delay)
                         continue
                     _mark_model(_UNAVAILABLE_MODELS, model)
                     model_errors.append(f"{model} unavailable after retries: {exc}")
+                    notify(
+                        f"{model} 连续 {self.transient_retries + 1} 次失败，标记本轮不可用；"
+                        "切换下一模型"
+                    )
                     break
                 finally:
                     if limiter is not None:
@@ -128,6 +151,10 @@ def _model_is_blocked(model: str) -> bool:
 def _mark_model(registry: set[str], model: str) -> None:
     with _STATE_LOCK:
         registry.add(model)
+
+
+def _short_error(exc: Exception, limit: int = 220) -> str:
+    return " ".join(str(exc).split())[:limit]
 
 
 def reset_exhausted_models() -> None:

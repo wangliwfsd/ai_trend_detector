@@ -7,7 +7,13 @@ from zoneinfo import ZoneInfo
 
 import typer
 
-from .audio import make_tts_provider, synthesize_episode
+from .audio import (
+    make_tts_provider,
+    resolve_audio_chunk_chars,
+    resolve_audio_language,
+    resolve_audio_style,
+    synthesize_episode,
+)
 from .config import load_config, load_env_file
 from .pipeline import run_pipeline
 
@@ -114,6 +120,7 @@ def audio_only(
     try:
         provider = make_tts_provider(loaded)
         typer.echo(f"TTS provider：{provider.__class__.__name__}")
+        typer.echo(f"TTS language：{resolve_audio_language(loaded)}")
         if hasattr(provider, "active"):
             typer.echo(f"TTS 首选模型：{provider.active.namespace}")
         stats = synthesize_episode(
@@ -121,11 +128,8 @@ def audio_only(
             output_path,
             provider,
             Path(audio_config.get("cache_dir", "data/audio-cache")),
-            style=audio_config.get(
-                "style",
-                "语速平稳、清晰、自然，像专业科技播客主播；英文缩写逐字母清楚发音。",
-            ),
-            chunk_chars=int(audio_config.get("chunk_chars", 700)),
+            style=resolve_audio_style(loaded),
+            chunk_chars=resolve_audio_chunk_chars(loaded),
             pause_ms=int(audio_config.get("pause_ms", 450)),
             bitrate=audio_config.get("bitrate", "128k"),
             cache_days=int(audio_config.get("cache_days", 14)),

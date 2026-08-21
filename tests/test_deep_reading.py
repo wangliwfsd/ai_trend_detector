@@ -94,7 +94,7 @@ def test_enrich_must_reads_uses_bounded_parallel_workers(monkeypatch, tmp_path):
         def __init__(self, **kwargs):
             self.model = "fake"
 
-        def analyze(self, item, language):
+        def analyze(self, item, language, progress=None):
             nonlocal active, maximum
             with lock:
                 active += 1
@@ -137,7 +137,7 @@ def test_enrich_must_reads_stops_submitting_after_quota_failure(monkeypatch, tmp
         def __init__(self, **kwargs):
             self.model = "fake"
 
-        def analyze(self, item, language):
+        def analyze(self, item, language, progress=None):
             calls.append(item.uid)
             if item.uid.endswith("0"):
                 raise RuntimeError("429 RESOURCE_EXHAUSTED: daily quota")
@@ -161,3 +161,27 @@ def test_enrich_must_reads_stops_submitting_after_quota_failure(monkeypatch, tmp
 
     assert len(calls) == 2
     assert any("停止派发" in warning for warning in warnings)
+
+
+def test_source_download_retries_transient_errors_with_progress(monkeypatch):
+    class FakeHTTP:
+        def __init__(self):
+            self.calls = 0
+
+        def get(self, url):
+            self.calls += 1
+            if self.calls < 3:
+                raise __import__("httpx").ReadTimeout("temporary timeout")
+            return SimpleNamespace(raise_for_status=lambda: None)
+
+    reader = GeminiDeepReader.__new__(GeminiDeepReader)
+    reader.http = FakeHTTP()
+    messages = []
+    monkeypatch.setattr("ai_trend_radar.deep_reading.time.sleep", lambda _: None)
+
+    reader._get_with_retries("https://example.com/paper.pdf", "PDF 下载", messages.append)
+
+    assert reader.http.calls == 3
+    assert "第 1/3 次失败" in messages[0]
+    assert "1 秒后重试" in messages[0]
+    assert "第 2/3 次失败" in messages[1]

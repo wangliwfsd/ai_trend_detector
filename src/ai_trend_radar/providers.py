@@ -189,20 +189,39 @@ class TrendNarrator(ABC):
 
 class HeuristicNarrator(TrendNarrator):
     def enrich(self, trends: list[Trend], language: str) -> list[Trend]:
+        english = language.casefold().startswith("en")
         for trend in trends:
-            arrow = "快速升温" if trend.velocity >= 1.0 else "持续活跃" if trend.velocity >= 0 else "热度回落"
-            trend.summary = (
-                f"近 7 天出现 {trend.count_7d} 条相关信号，覆盖 {trend.source_count} 类来源，"
-                f"相对过去 30 天基线呈{arrow}。"
-            )
             lead = trend.items[0].title if trend.items else trend.label
-            trend.why_it_matters = f"最新代表性信号“{lead}”显示该方向正从研究想法向可复用能力演进。"
+            if english:
+                arrow = "rising quickly" if trend.velocity >= 1.0 else "sustained activity" if trend.velocity >= 0 else "cooling"
+                trend.summary = (
+                    f"The last 7 days contain {trend.count_7d} related signals across "
+                    f"{trend.source_count} source types, indicating {arrow} relative to the 30-day baseline."
+                )
+                trend.why_it_matters = (
+                    f"The representative signal “{lead}” should be evaluated for reproducibility "
+                    "and integration cost before it changes an engineering decision."
+                )
+            else:
+                arrow = "快速升温" if trend.velocity >= 1.0 else "持续活跃" if trend.velocity >= 0 else "热度回落"
+                trend.summary = (
+                    f"近 7 天出现 {trend.count_7d} 条相关信号，覆盖 {trend.source_count} 类来源，"
+                    f"相对过去 30 天基线呈{arrow}。"
+                )
+                trend.why_it_matters = f"最新代表性信号“{lead}”显示该方向正从研究想法向可复用能力演进。"
             for item in trend.items[:6]:
-                item.metadata["method_explanation"] = self.explain_method(item.title, item.summary)
+                item.metadata["method_explanation"] = self.explain_method(
+                    item.title, item.summary, language
+                )
         return trends
 
     @staticmethod
-    def explain_method(title: str, summary: str) -> dict[str, str]:
+    def explain_method(
+        title: str,
+        summary: str,
+        language: str = "zh-CN",
+    ) -> dict[str, str]:
+        english = language.casefold().startswith("en")
         sentences = [
             value.strip()
             for value in re.split(r"(?<=[.!?。！？])\s+", summary.strip())
@@ -210,9 +229,21 @@ class HeuristicNarrator(TrendNarrator):
         ]
         if not sentences:
             return {
-                "purpose": f"研究“{title}”所对应的问题或应用场景。",
-                "approach": "当前信号没有提供足够摘要，需要打开原文确认具体模型或系统结构。",
-                "difference": "摘要未明确说明它与既有方法的差异。",
+                "purpose": (
+                    f"Investigate the problem or application represented by “{title}”."
+                    if english
+                    else f"研究“{title}”所对应的问题或应用场景。"
+                ),
+                "approach": (
+                    "The signal lacks enough detail to identify the model or system mechanism."
+                    if english
+                    else "当前信号没有提供足够摘要，需要打开原文确认具体模型或系统结构。"
+                ),
+                "difference": (
+                    "The summary does not establish a material difference from prior work."
+                    if english
+                    else "摘要未明确说明它与既有方法的差异。"
+                ),
             }
         purpose = sentences[0][:260]
         method_pattern = re.compile(
@@ -231,7 +262,11 @@ class HeuristicNarrator(TrendNarrator):
         )
         difference_sentence = next(
             (sentence for sentence in sentences if difference_pattern.search(sentence)),
-            "摘要未明确说明它与既有方法的差异。",
+            (
+                "The summary does not establish a material difference from prior work."
+                if english
+                else "摘要未明确说明它与既有方法的差异。"
+            ),
         )
         approach = method_sentence[:300]
         difference = difference_sentence[:260]
@@ -437,7 +472,7 @@ DATA:
                 for item in fallback_items:
                     item.metadata.setdefault(
                         "method_explanation",
-                        HeuristicNarrator.explain_method(item.title, item.summary),
+                        HeuristicNarrator.explain_method(item.title, item.summary, language),
                     )
             usable = [
                 trend
@@ -493,6 +528,8 @@ class HeuristicSpeechWriter(SpeechWriter):
         target_minutes: int,
         report_date: str,
     ) -> SpeechScript:
+        if language.casefold().startswith("en"):
+            return self._write_english(trends, target_minutes, report_date)
         title = f"AI 趋势雷达口播稿｜{report_date}"
         parts = [
             f"大家好，今天是{report_date}，欢迎收听 AI 趋势雷达。今天我们不追逐零散新闻，"
@@ -568,6 +605,77 @@ class HeuristicSpeechWriter(SpeechWriter):
             provider="heuristic",
         )
 
+    def _write_english(
+        self,
+        trends: list[Trend],
+        target_minutes: int,
+        report_date: str,
+    ) -> SpeechScript:
+        parts = [
+            f"Hello, and welcome to the AI Trend Radar for {report_date}. This briefing compares "
+            f"the latest seven-day signals with a thirty-day baseline and selects {len(trends)} trends.",
+            "The focus is not a leaderboard score in isolation, but the mechanism, evidence boundary, "
+            "systems trade-off, and the decision each signal could change.",
+        ]
+        transitions = ["First", "Second", "Next", "Fourth", "Finally"]
+        field_leads = {
+            "evidence": "The reported evidence is",
+            "experimental_setup": "The experimental setup is",
+            "baseline_fairness": "On baseline fairness",
+            "ablations_and_mechanism": "The mechanism evidence is",
+            "key_evidence": "The key result is",
+            "unproven_claims": "The work does not establish",
+            "limitations": "The main evidence boundary is",
+            "applicability": "The applicable regime is",
+            "adoption_prerequisites": "Adoption requires",
+            "replication_checks": "The highest-value replication checks are",
+            "verdict": "The current verdict is",
+        }
+        for index, trend in enumerate(trends):
+            status = "New signals entered today" if trend.new_count else "This is a continuing trend"
+            block = [
+                f"{transitions[index] if index < len(transitions) else 'The next trend'}: {trend.label}. "
+                f"{status}. The cluster contains {trend.count_7d} signals over seven days and "
+                f"{trend.count_30d} over thirty days, across {trend.source_count} source types.",
+                trend.summary,
+                f"Why it matters: {trend.why_it_matters}",
+            ]
+            selected = [
+                item for item in trend.items if item.metadata.get("selected_must_read")
+            ] or trend.items[:2]
+            for item_index, item in enumerate(selected, 1):
+                explanation = item.metadata.get("method_explanation", {})
+                if not isinstance(explanation, dict):
+                    explanation = HeuristicNarrator.explain_method(
+                        item.title, item.summary, "en-US"
+                    )
+                block.extend(
+                    [
+                        f"Must-read signal {item_index} is {item.title}.",
+                        f"Its purpose is: {explanation.get('purpose', '')}",
+                        f"At a high level, it works as follows: {explanation.get('approach', '')}",
+                        f"The material difference is: {explanation.get('difference', '')}",
+                    ]
+                )
+                for field, lead in field_leads.items():
+                    if explanation.get(field):
+                        block.append(f"{lead}: {explanation[field]}")
+            parts.append("\n\n".join(block))
+        parts.extend(
+            [
+                "Across these trends, watch for independent reproduction, stable open-source implementations, "
+                "and end-to-end gains that survive realistic hardware and workload constraints.",
+                "That concludes today's AI Trend Radar. Start with the anchor paper in each primary trend, "
+                "then use the engineering evidence to decide what is worth reproducing or adopting.",
+            ]
+        )
+        return SpeechScript(
+            title=f"AI Trend Radar Briefing | {report_date}",
+            content="\n\n".join(parts),
+            estimated_minutes=target_minutes,
+            provider="heuristic",
+        )
+
 
 class GeminiSpeechWriter(SpeechWriter):
     SCHEMA: dict[str, Any] = {
@@ -600,7 +708,11 @@ class GeminiSpeechWriter(SpeechWriter):
         target_minutes: int,
         report_date: str,
     ) -> SpeechScript:
-        target_chars = target_minutes * 240
+        english = language.casefold().startswith("en")
+        target_units = target_minutes * (150 if english else 240)
+        unit_name = "English words" if english else "Chinese characters"
+        minimum_units = int(target_units * 0.92)
+        maximum_units = int(target_units * 1.10)
         compact = []
         for trend in trends:
             compact.append(
@@ -637,7 +749,7 @@ class GeminiSpeechWriter(SpeechWriter):
             )
         prompt = f"""You are writing a daily spoken AI trend briefing in {language} for {report_date}.
 Write a natural, technically dense script for about {target_minutes} minutes, targeting roughly
-{target_chars} Chinese characters (acceptable range: {int(target_chars * 0.92)}–{int(target_chars * 1.10)}).
+{target_units} {unit_name} (acceptable range: {minimum_units}–{maximum_units}).
 
 Required structure:
 1. A 45-second hook and executive overview. State that this briefing compares the latest 7-day
@@ -701,13 +813,17 @@ DATA:
                     )
                     continue
                 script = payload["script"].strip()
-                actual_chars = len(re.sub(r"\s+", "", script))
-                if int(target_chars * 0.92) <= actual_chars <= int(target_chars * 1.1):
+                actual_units = (
+                    len(re.findall(r"\b[\w'-]+\b", script))
+                    if english
+                    else len(re.sub(r"\s+", "", script))
+                )
+                if minimum_units <= actual_units <= maximum_units:
                     break
                 if attempt < 2:
                     prompt += (
-                        f"\n\nQUALITY CHECK: The previous draft had {actual_chars} non-whitespace "
-                        f"characters, outside the useful range for {target_minutes} minutes. "
+                        f"\n\nQUALITY CHECK: The previous draft had {actual_units} {unit_name}, "
+                        f"outside the useful range for {target_minutes} minutes. "
                         "Rewrite the complete script, preserving factual grounding and all required sections."
                     )
             if not payload:

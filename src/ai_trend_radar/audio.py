@@ -45,7 +45,13 @@ class TTSProvider(ABC):
 
 
 class GeminiTTSProvider(TTSProvider):
-    def __init__(self, model: str, voice: str, retries: int = 3):
+    def __init__(
+        self,
+        model: str,
+        voice: str,
+        retries: int = 3,
+        language: str = "zh-CN",
+    ):
         if not os.getenv("GEMINI_API_KEY"):
             raise RuntimeError("GEMINI_API_KEY is required for Gemini TTS")
         try:
@@ -58,15 +64,20 @@ class GeminiTTSProvider(TTSProvider):
         self.model = model
         self.voice = voice
         self.retries = max(1, retries)
+        self.language = normalize_language(language)
 
     @property
     def namespace(self) -> str:
-        return f"gemini:{self.model}:{self.voice}:pcm24k-v1"
+        language = getattr(self, "language", "zh-CN")
+        return f"gemini:{self.model}:{self.voice}:{language}:pcm24k-v2"
 
     def synthesize(self, text: str, style: str) -> PCMChunk:
-        prompt = f"""Synthesize a single-speaker Mandarin Chinese podcast narration.
+        spoken_language = language_name(getattr(self, "language", "zh-CN"))
+        prompt = f"""Synthesize a single-speaker {spoken_language} podcast narration.
 Audio profile: knowledgeable and approachable technology analyst.
 Director notes: {style}
+Speak the transcript in {spoken_language}. Preserve technical names and acronyms in their original
+language, but pronounce them naturally for a {spoken_language} listener.
 Read only the text between TRANSCRIPT_START and TRANSCRIPT_END. Do not read the labels,
 director notes, or any formatting instructions aloud.
 
@@ -169,17 +180,22 @@ class LocalHTTPProvider(TTSProvider):
         voice: str,
         speed: float = 1.0,
         timeout_seconds: float = 300,
+        language: str = "zh-CN",
         client: httpx.Client | None = None,
     ):
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.voice = voice
         self.speed = speed
+        self.language = normalize_language(language)
         self.client = client or httpx.Client(timeout=timeout_seconds)
 
     @property
     def namespace(self) -> str:
-        return f"local-http:{self.base_url}:{self.model}:{self.voice}:{self.speed}:wav-v1"
+        return (
+            f"local-http:{self.base_url}:{self.model}:{self.voice}:"
+            f"{self.speed}:{self.language}:wav-v2"
+        )
 
     @property
     def max_parallel_workers(self) -> int:
@@ -202,33 +218,101 @@ class LocalHTTPProvider(TTSProvider):
 
 def make_tts_provider(config: dict[str, Any]) -> TTSProvider:
     section = config.get("audio", {})
+    language = resolve_audio_language(config)
     if section.get("provider") == "fallback":
         providers = [
-            _make_tts_provider_from_section(value)
+            _make_tts_provider_from_section(value, language)
             for value in section.get("providers", [])
             if isinstance(value, dict)
         ]
         return FallbackTTSProvider(providers)
-    return _make_tts_provider_from_section(section)
+    return _make_tts_provider_from_section(section, language)
 
 
-def _make_tts_provider_from_section(section: dict[str, Any]) -> TTSProvider:
+def _make_tts_provider_from_section(
+    section: dict[str, Any],
+    language: str,
+) -> TTSProvider:
     provider = section.get("provider", "gemini")
+    voice = language_value(section, "voices", language) or section.get("voice")
     if provider == "gemini":
         return GeminiTTSProvider(
             model=section.get("model", "gemini-3.1-flash-tts-preview"),
-            voice=section.get("voice", "Charon"),
+            voice=voice or "Charon",
             retries=int(section.get("retries", 3)),
+            language=language,
         )
     if provider in {"local", "local_http", "openai_compatible"}:
         return LocalHTTPProvider(
             base_url=section.get("base_url", "http://127.0.0.1:8880"),
             model=section.get("model", "tts-1"),
-            voice=section.get("voice", "default"),
+            voice=voice or "default",
             speed=float(section.get("speed", 1.0)),
             timeout_seconds=float(section.get("timeout_seconds", 300)),
+            language=language,
         )
     raise ValueError(f"Unsupported audio provider: {provider}")
+
+
+def normalize_language(value: str) -> str:
+    normalized = str(value or "").strip().replace("_", "-").casefold()
+    if normalized in {"zh", "zh-cn", "cmn", "chinese", "mandarin"}:
+        return "zh-CN"
+    if normalized in {"en", "en-us", "english"}:
+        return "en-US"
+    raise ValueError(f"Unsupported language {value!r}; use zh-CN or en-US")
+
+
+def resolve_audio_language(config: dict[str, Any]) -> str:
+    section = config.get("audio", {})
+    value = str(section.get("language", "same_as_report")).strip()
+    if value.casefold() in {"same_as_report", "same-as-report", "report"}:
+        value = str(config.get("radar", {}).get("report_language", "zh-CN"))
+    return normalize_language(value)
+
+
+def resolve_audio_style(config: dict[str, Any]) -> str:
+    section = config.get("audio", {})
+    language = resolve_audio_language(config)
+    configured = language_value(section, "styles", language)
+    if configured:
+        return configured
+    if section.get("style"):
+        return str(section["style"])
+    if language == "en-US":
+        return "Calm, clear, natural delivery in the style of a professional technology podcast."
+    return "语速平稳、清晰、自然，像专业科技播客主播；英文缩写逐字母清楚发音。"
+
+
+def resolve_audio_chunk_chars(config: dict[str, Any]) -> int:
+    section = config.get("audio", {})
+    language = resolve_audio_language(config)
+    configured = language_value(section, "chunk_chars_by_language", language)
+    if configured is not None:
+        return max(100, int(configured))
+    return max(100, int(section.get("chunk_chars", 700)))
+
+
+def language_value(
+    section: dict[str, Any],
+    field: str,
+    language: str,
+) -> str | None:
+    values = section.get(field, {})
+    if not isinstance(values, dict):
+        return None
+    for key, value in values.items():
+        try:
+            matches = normalize_language(str(key)) == language
+        except ValueError:
+            matches = str(key).casefold() == "default"
+        if matches and str(value).strip():
+            return str(value).strip()
+    return None
+
+
+def language_name(language: str) -> str:
+    return "English" if normalize_language(language) == "en-US" else "Mandarin Chinese"
 
 
 def _retryable_tts_error(exc: Exception) -> bool:
@@ -249,7 +333,10 @@ def split_for_tts(text: str, max_chars: int = 700) -> list[str]:
     for paragraph in paragraphs:
         units.extend(
             value.strip()
-            for value in re.split(r"(?<=[。！？!?；;])", paragraph)
+            for value in re.split(
+                r"(?<=[。！？；])|(?<=[.!?;])\s+",
+                paragraph,
+            )
             if value.strip()
         )
 
@@ -265,7 +352,7 @@ def split_for_tts(text: str, max_chars: int = 700) -> list[str]:
                 current = candidate
     if current:
         chunks.append(current)
-    return chunks
+    return _rebalance_short_tail(chunks, max_chars)
 
 
 def _split_oversized(text: str, max_chars: int) -> list[str]:
@@ -285,6 +372,30 @@ def _split_oversized(text: str, max_chars: int) -> list[str]:
     if remaining:
         pieces.append(remaining)
     return pieces
+
+
+def _rebalance_short_tail(chunks: list[str], max_chars: int) -> list[str]:
+    if len(chunks) < 2 or len(chunks[-1]) >= max(40, int(max_chars * 0.2)):
+        return chunks
+    previous, tail = chunks[-2:]
+    combined = f"{previous}\n{tail}"
+    if len(combined) <= max_chars:
+        return [*chunks[:-2], combined]
+
+    midpoint = len(combined) // 2
+    candidates = [
+        match.end()
+        for match in re.finditer(r"[。！？；.!?;,，、:]\s*|\s+", combined)
+        if 100 <= match.end() <= len(combined) - 100
+    ]
+    if not candidates:
+        return chunks
+    cut = min(candidates, key=lambda value: abs(value - midpoint))
+    left = combined[:cut].strip()
+    right = combined[cut:].strip()
+    if not left or not right or max(len(left), len(right)) > max_chars:
+        return chunks
+    return [*chunks[:-2], left, right]
 
 
 def synthesize_episode(

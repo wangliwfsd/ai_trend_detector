@@ -30,6 +30,19 @@ class InvalidJSONThenValidModels:
         )
 
 
+class EnglishModels:
+    def __init__(self):
+        self.prompt = ""
+
+    def generate_content(self, **kwargs):
+        self.prompt = kwargs["contents"]
+        return SimpleNamespace(
+            text=json.dumps(
+                {"title": "AI Trend Radar", "script": "word " * 2250}
+            )
+        )
+
+
 def test_gemini_speech_writer_retries_when_first_draft_is_too_short():
     item = Item(
         uid="paper:1",
@@ -84,6 +97,21 @@ def test_gemini_speech_writer_retries_invalid_json():
 
     assert models.calls == 2
     assert len(result.content) == 3600
+
+
+def test_gemini_speech_writer_uses_word_target_for_english():
+    trend = Trend(2, "Agent Infrastructure", 2.0, 0.2, 2, 4, 1, [])
+    writer = GeminiSpeechWriter.__new__(GeminiSpeechWriter)
+    models = EnglishModels()
+    writer.client = SimpleNamespace(models=models)
+    writer.types = SimpleNamespace(GenerateContentConfig=lambda **kwargs: kwargs)
+    writer.model = "fake-gemini"
+    writer.pool = QuotaAwareModelPool(["fake-gemini"])
+
+    result = writer.write([trend], "en-US", 15, "2026-08-21")
+
+    assert len(result.content.split()) == 2250
+    assert "2250 English words" in models.prompt
 
 
 def test_heuristic_speech_uses_deep_fields_without_repeated_generic_advice():

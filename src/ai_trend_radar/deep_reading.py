@@ -6,6 +6,7 @@ import os
 import re
 import tempfile
 import threading
+import time
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from collections import deque
 from pathlib import Path
@@ -90,7 +91,12 @@ class GeminiDeepReader:
             headers={"User-Agent": "ai-trend-radar/0.1 (research reader)"},
         )
 
-    def analyze(self, item: Item, language: str) -> tuple[dict[str, str], bool]:
+    def analyze(
+        self,
+        item: Item,
+        language: str,
+        progress: Callable[[str], None] | None = None,
+    ) -> tuple[dict[str, str], bool]:
         cache_path = self._cache_path(item, language)
         if cache_path.exists():
             try:
@@ -100,7 +106,7 @@ class GeminiDeepReader:
             except (OSError, json.JSONDecodeError):
                 pass
 
-        source_part, source_scope = self._load_source(item)
+        source_part, source_scope = self._load_source(item, progress)
         prompt = self._prompt(item, language, source_scope)
         contents: list[Any]
         if isinstance(source_part, bytes):
@@ -124,7 +130,8 @@ class GeminiDeepReader:
                         max_output_tokens=8192,
                         automatic_function_calling={"disable": True},
                     ),
-                )
+                ),
+                progress=progress,
             )
             self.model = self.pool.last_model
             try:
@@ -132,6 +139,11 @@ class GeminiDeepReader:
                 break
             except json.JSONDecodeError as exc:
                 last_json_error = exc
+                if progress and attempt < 2:
+                    progress(
+                        f"Gemini 返回无效或截断 JSON：第 {attempt + 1}/3 次；"
+                        "正在请求完整重写"
+                    )
                 request_contents = [
                     *contents,
                     "The previous response was truncated or invalid JSON. Return a complete, compact "
@@ -147,11 +159,18 @@ class GeminiDeepReader:
         _atomic_write_json(cache_path, result)
         return result, False
 
-    def _load_source(self, item: Item) -> tuple[bytes | str, str]:
+    def _load_source(
+        self,
+        item: Item,
+        progress: Callable[[str], None] | None = None,
+    ) -> tuple[bytes | str, str]:
         arxiv_id = extract_arxiv_id(item)
         if arxiv_id:
-            response = self.http.get(f"https://arxiv.org/pdf/{arxiv_id}")
-            response.raise_for_status()
+            response = self._get_with_retries(
+                f"https://arxiv.org/pdf/{arxiv_id}",
+                "PDF 下载",
+                progress,
+            )
             content_type = response.headers.get("content-type", "").lower()
             if "pdf" not in content_type and not response.content.startswith(b"%PDF"):
                 raise RuntimeError(f"arXiv did not return a PDF for {arxiv_id}")
@@ -162,8 +181,7 @@ class GeminiDeepReader:
             return response.content, "full_paper"
 
         try:
-            response = self.http.get(item.url)
-            response.raise_for_status()
+            response = self._get_with_retries(item.url, "网页下载", progress)
             soup = BeautifulSoup(response.text, "html.parser")
             for element in soup(["script", "style", "nav", "footer"]):
                 element.decompose()
@@ -172,11 +190,44 @@ class GeminiDeepReader:
             )
             if len(text) >= 500:
                 return text[:80_000], "page_text"
-        except (httpx.HTTPError, ValueError):
-            pass
+        except (httpx.HTTPError, ValueError) as exc:
+            if progress:
+                progress(
+                    f"工程正文下载失败，降级为摘要：{type(exc).__name__}: "
+                    f"{_short_error(exc)}"
+                )
         return f"Title: {item.title}\nAbstract/summary: {item.summary}", "abstract_fallback"
 
+    def _get_with_retries(
+        self,
+        url: str,
+        operation: str,
+        progress: Callable[[str], None] | None,
+    ) -> httpx.Response:
+        attempts = 3
+        for attempt in range(attempts):
+            try:
+                response = self.http.get(url)
+                response.raise_for_status()
+                return response
+            except httpx.HTTPError as exc:
+                if attempt + 1 >= attempts or not _retryable_http_error(exc):
+                    raise
+                delay = 2**attempt
+                if progress:
+                    progress(
+                        f"{operation}第 {attempt + 1}/{attempts} 次失败："
+                        f"{type(exc).__name__}: {_short_error(exc)}；{delay} 秒后重试"
+                    )
+                time.sleep(delay)
+        raise RuntimeError(f"{operation} failed without a response")
+
     def _prompt(self, item: Item, language: str, source_scope: str) -> str:
+        verdicts = (
+            '"replicate", "watch", or "do not adopt yet"'
+            if language.casefold().startswith("en")
+            else '"值得复现", "值得跟踪", or "暂不建议采用"'
+        )
         return f"""You are performing a technical deep read for an expert AI audience.
 Analyze the supplied source for: {item.title}
 Source type: {item.kind}; source scope: {source_scope}.
@@ -217,7 +268,7 @@ Fields:
   operational assumptions that must hold before adoption.
 - replication_checks: the 2–4 highest-value checks needed to validate the claim in another lab or
   production workload, written as a compact semicolon-separated list.
-- verdict: start with exactly one of "值得复现", "值得跟踪", or "暂不建议采用", followed by the
+- verdict: start with exactly one of {verdicts}, followed by the
   concrete condition that would change that verdict.
 
 Paper-type checklist (apply only the relevant row):
@@ -300,7 +351,10 @@ def enrich_must_reads(
     unused_readers = [first_reader]
     reader_lock = threading.Lock()
 
-    def analyze(item: Item) -> tuple[dict[str, str], bool]:
+    def analyze(
+        index: int,
+        item: Item,
+    ) -> tuple[dict[str, str], bool]:
         reader = getattr(worker_state, "reader", None)
         if reader is None:
             with reader_lock:
@@ -308,7 +362,12 @@ def enrich_must_reads(
             if reader is None:
                 reader = GeminiDeepReader(**reader_kwargs)
             worker_state.reader = reader
-        return reader.analyze(item, language)
+        item_progress = None
+        if progress:
+            item_progress = lambda message: progress(
+                f"深读 {index}/{len(selected)} retry：{message}"
+            )
+        return reader.analyze(item, language, progress=item_progress)
     selected: list[Item] = []
     seen: set[str] = set()
     for trend in trends:
@@ -338,7 +397,7 @@ def enrich_must_reads(
         index, item = pending_items.popleft()
         if progress:
             progress(f"深读 {index}/{len(selected)}：{item.title[:60]}")
-        in_flight[executor.submit(analyze, item)] = (index, item)
+        in_flight[executor.submit(analyze, index, item)] = (index, item)
 
     with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="deep-read") as executor:
         for _ in range(min(max_workers, len(pending_items))):
@@ -364,7 +423,8 @@ def enrich_must_reads(
                     )
                     if progress:
                         progress(
-                            f"深读 {index}/{len(selected)} 失败，保留摘要级分析：{type(exc).__name__}"
+                            f"深读 {index}/{len(selected)} 失败，保留摘要级分析："
+                            f"{type(exc).__name__}: {_short_error(exc)}"
                         )
                     if _is_quota_stop(exc) and not stop_submitting:
                         stop_submitting = True
@@ -384,6 +444,18 @@ def _is_quota_stop(exc: Exception) -> bool:
         or "all configured gemini model quotas are exhausted" in error_text
         or "no configured gemini model is currently available" in error_text
     )
+
+
+def _retryable_http_error(exc: httpx.HTTPError) -> bool:
+    if isinstance(exc, (httpx.TimeoutException, httpx.TransportError)):
+        return True
+    response = getattr(exc, "response", None)
+    status = getattr(response, "status_code", None)
+    return status in {408, 409, 425, 429, 500, 502, 503, 504}
+
+
+def _short_error(exc: Exception, limit: int = 240) -> str:
+    return " ".join(str(exc).split())[:limit]
 
 
 def _atomic_write_json(path: Path, value: dict[str, Any]) -> None:
