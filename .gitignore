@@ -1,5 +1,6 @@
 .env
 config.yaml
+.DS_Store
 .venv/
 .verify-venv/
 __pycache__/
@@ -8,6 +9,7 @@ __pycache__/
 data/*.db
 data/*.db.bak-*
 data/audio-cache/
+data/deep-read-cache/
 reports/*.md
 reports/sample/
 reports/*.mp3

@@ -1,12 +1,15 @@
 import io
 import base64
 import wave
+import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
 import httpx
 
 from ai_trend_radar.audio import (
+    FallbackTTSProvider,
     LocalHTTPProvider,
     GeminiTTSProvider,
     PCMChunk,
@@ -74,6 +77,52 @@ def test_audio_chunks_are_cached(tmp_path: Path, monkeypatch):
     assert (tmp_path / "reports" / "latest.mp3").exists()
 
 
+def test_parallel_safe_local_tts_synthesizes_chunks_concurrently(tmp_path: Path, monkeypatch):
+    class ParallelProvider(FakeTTSProvider):
+        def __init__(self):
+            super().__init__()
+            self.active = 0
+            self.maximum = 0
+            self.lock = threading.Lock()
+
+        @property
+        def max_parallel_workers(self) -> int:
+            return 3
+
+        def synthesize(self, text: str, style: str) -> PCMChunk:
+            with self.lock:
+                self.calls += 1
+                self.active += 1
+                self.maximum = max(self.maximum, self.active)
+            time.sleep(0.03)
+            with self.lock:
+                self.active -= 1
+            return PCMChunk(b"\0\0" * 240)
+
+    provider = ParallelProvider()
+
+    def fake_join(paths, output_path, pause_ms, bitrate):
+        assert len(paths) >= 3
+        assert all(path.exists() for path in paths)
+        output_path.write_bytes(b"fake-mp3")
+
+    monkeypatch.setattr("ai_trend_radar.audio._join_to_mp3", fake_join)
+    script = "\n\n".join(f"第{i}段" + "内容" * 45 + "。" for i in range(6))
+
+    stats = synthesize_episode(
+        script,
+        tmp_path / "report.mp3",
+        provider,
+        tmp_path / "cache",
+        style="自然",
+        chunk_chars=100,
+        max_workers=3,
+    )
+
+    assert stats["cache_misses"] >= 3
+    assert provider.maximum == 3
+
+
 def test_local_http_provider_uses_openai_compatible_endpoint():
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/v1/audio/speech"
@@ -139,3 +188,22 @@ def test_gemini_provider_does_not_retry_non_transient_400():
     else:
         raise AssertionError("Expected Gemini TTS to fail")
     assert interactions.calls == 1
+
+
+def test_tts_fallback_switches_on_quota_and_keeps_selected_provider():
+    class QuotaGemini(GeminiTTSProvider):
+        def __init__(self):
+            self.model = "quota-tts"
+            self.voice = "Charon"
+
+        def synthesize(self, text, style):
+            raise RuntimeError("429 RESOURCE_EXHAUSTED: daily quota")
+
+    local = FakeTTSProvider()
+    provider = FallbackTTSProvider([QuotaGemini(), local])
+
+    result = provider.synthesize("你好", "自然")
+
+    assert result.data
+    assert provider.namespace == local.namespace
+    assert local.calls == 1

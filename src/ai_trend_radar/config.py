@@ -39,6 +39,10 @@ def load_config(path: Path) -> dict[str, Any]:
         value = Path(config["audio"]["cache_dir"])
         if not value.is_absolute():
             config["audio"]["cache_dir"] = str(base / value)
+    if "deep_reading" in config and config["deep_reading"].get("cache_dir"):
+        value = Path(config["deep_reading"]["cache_dir"])
+        if not value.is_absolute():
+            config["deep_reading"]["cache_dir"] = str(base / value)
     return config
 
 

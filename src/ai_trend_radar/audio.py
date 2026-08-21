@@ -12,11 +12,14 @@ import time
 import wave
 import warnings
 from abc import ABC, abstractmethod
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
 import httpx
+
+from .gemini_utils import is_quota_exhausted, is_transient_server_error
 
 
 @dataclass(slots=True)
@@ -28,6 +31,11 @@ class PCMChunk:
 
 
 class TTSProvider(ABC):
+    @property
+    def max_parallel_workers(self) -> int:
+        """Safe synthesis concurrency; cloud/fallback providers stay serialized."""
+        return 1
+
     @property
     @abstractmethod
     def namespace(self) -> str: ...
@@ -42,9 +50,11 @@ class GeminiTTSProvider(TTSProvider):
             raise RuntimeError("GEMINI_API_KEY is required for Gemini TTS")
         try:
             from google import genai
+            from google.genai import types
         except ImportError as exc:
             raise RuntimeError("Install the Gemini extra: pip install -e '.[gemini]'") from exc
         self.client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+        self.types = types
         self.model = model
         self.voice = voice
         self.retries = max(1, retries)
@@ -68,33 +78,85 @@ TRANSCRIPT_END"""
         for attempt in range(self.retries):
             attempts_used = attempt + 1
             try:
-                with warnings.catch_warnings():
-                    warnings.filterwarnings(
-                        "ignore",
-                        message="Interactions usage is experimental.*",
-                        category=UserWarning,
-                    )
-                    interaction = self.client.interactions.create(
+                if self.model == "gemini-2.5-flash-preview-tts":
+                    response = self.client.models.generate_content(
                         model=self.model,
-                        input=prompt,
-                        response_format={"type": "audio"},
-                        generation_config={"speech_config": [{"voice": self.voice}]},
+                        contents=prompt,
+                        config=self.types.GenerateContentConfig(
+                            response_modalities=["AUDIO"],
+                            automatic_function_calling={"disable": True},
+                            speech_config=self.types.SpeechConfig(
+                                voice_config=self.types.VoiceConfig(
+                                    prebuilt_voice_config=self.types.PrebuiltVoiceConfig(
+                                        voice_name=self.voice
+                                    )
+                                )
+                            ),
+                        ),
                     )
-                audio = interaction.output_audio
-                if not audio or not getattr(audio, "data", None):
-                    raise RuntimeError("Gemini TTS returned no audio data")
-                value = audio.data
-                pcm = base64.b64decode(value) if isinstance(value, str) else bytes(value)
+                    value = response.candidates[0].content.parts[0].inline_data.data
+                    pcm = base64.b64decode(value) if isinstance(value, str) else bytes(value)
+                else:
+                    with warnings.catch_warnings():
+                        warnings.filterwarnings(
+                            "ignore",
+                            message="Interactions usage is experimental.*",
+                            category=UserWarning,
+                        )
+                        interaction = self.client.interactions.create(
+                            model=self.model,
+                            input=prompt,
+                            response_format={"type": "audio"},
+                            generation_config={"speech_config": [{"voice": self.voice}]},
+                        )
+                    audio = interaction.output_audio
+                    if not audio or not getattr(audio, "data", None):
+                        raise RuntimeError("Gemini TTS returned no audio data")
+                    value = audio.data
+                    pcm = base64.b64decode(value) if isinstance(value, str) else bytes(value)
                 if not pcm:
                     raise RuntimeError("Gemini TTS returned empty audio data")
                 return PCMChunk(pcm)
             except Exception as exc:
                 last_error = exc
-                if not _retryable_tts_error(exc):
+                if is_quota_exhausted(exc) or not _retryable_tts_error(exc):
                     break
                 if attempt + 1 < self.retries:
                     time.sleep(2**attempt)
         raise RuntimeError(f"Gemini TTS failed after {attempts_used} attempt(s): {last_error}")
+
+
+class FallbackTTSProvider(TTSProvider):
+    """Switch provider only when the current Gemini model's daily quota is exhausted."""
+
+    def __init__(self, providers: list[TTSProvider]):
+        if not providers:
+            raise ValueError("At least one TTS fallback provider is required")
+        self.providers = providers
+        self.active_index = 0
+
+    @property
+    def active(self) -> TTSProvider:
+        return self.providers[self.active_index]
+
+    @property
+    def namespace(self) -> str:
+        return self.active.namespace
+
+    def synthesize(self, text: str, style: str) -> PCMChunk:
+        quota_errors: list[str] = []
+        while self.active_index < len(self.providers):
+            provider = self.active
+            try:
+                return provider.synthesize(text, style)
+            except Exception as exc:
+                if not isinstance(provider, GeminiTTSProvider) or not (
+                    is_quota_exhausted(exc) or is_transient_server_error(exc)
+                ):
+                    raise
+                quota_errors.append(f"{provider.model}: {exc}")
+                self.active_index += 1
+        raise RuntimeError("All TTS provider quotas are exhausted: " + "; ".join(quota_errors))
 
 
 class LocalHTTPProvider(TTSProvider):
@@ -119,6 +181,10 @@ class LocalHTTPProvider(TTSProvider):
     def namespace(self) -> str:
         return f"local-http:{self.base_url}:{self.model}:{self.voice}:{self.speed}:wav-v1"
 
+    @property
+    def max_parallel_workers(self) -> int:
+        return 4
+
     def synthesize(self, text: str, style: str) -> PCMChunk:
         response = self.client.post(
             f"{self.base_url}/v1/audio/speech",
@@ -136,6 +202,17 @@ class LocalHTTPProvider(TTSProvider):
 
 def make_tts_provider(config: dict[str, Any]) -> TTSProvider:
     section = config.get("audio", {})
+    if section.get("provider") == "fallback":
+        providers = [
+            _make_tts_provider_from_section(value)
+            for value in section.get("providers", [])
+            if isinstance(value, dict)
+        ]
+        return FallbackTTSProvider(providers)
+    return _make_tts_provider_from_section(section)
+
+
+def _make_tts_provider_from_section(section: dict[str, Any]) -> TTSProvider:
     provider = section.get("provider", "gemini")
     if provider == "gemini":
         return GeminiTTSProvider(
@@ -220,6 +297,7 @@ def synthesize_episode(
     pause_ms: int = 450,
     bitrate: str = "128k",
     cache_days: int = 14,
+    max_workers: int = 1,
     progress: Callable[[str], None] | None = None,
 ) -> dict[str, int]:
     notify = progress or (lambda _: None)
@@ -231,18 +309,64 @@ def synthesize_episode(
     wav_paths: list[Path] = []
     hits = 0
     misses = 0
-    for index, text in enumerate(chunks, 1):
-        key = _audio_cache_key(provider.namespace, style, text)
-        path = cache_dir / f"{key}.wav"
-        if _valid_wav(path):
-            hits += 1
-            notify(f"音频分段 {index}/{len(chunks)}：缓存命中")
-        else:
-            misses += 1
-            notify(f"音频分段 {index}/{len(chunks)}：正在合成（{len(text)} 字符）")
-            pcm = provider.synthesize(text, style)
-            _write_wav(path, pcm)
-        wav_paths.append(path)
+    requested_workers = max(1, int(max_workers))
+    effective_workers = min(requested_workers, provider.max_parallel_workers)
+    if requested_workers > effective_workers:
+        notify(
+            f"TTS 并发已限制为 {effective_workers}："
+            f"{provider.__class__.__name__} 需要串行配额/回退状态"
+        )
+
+    if effective_workers == 1:
+        for index, text in enumerate(chunks, 1):
+            key = _audio_cache_key(provider.namespace, style, text)
+            path = cache_dir / f"{key}.wav"
+            if _valid_wav(path):
+                hits += 1
+                notify(f"音频分段 {index}/{len(chunks)}：缓存命中")
+            else:
+                misses += 1
+                notify(f"音频分段 {index}/{len(chunks)}：正在合成（{len(text)} 字符）")
+                initial_namespace = provider.namespace
+                pcm = provider.synthesize(text, style)
+                if provider.namespace != initial_namespace:
+                    notify(f"TTS 配额切换：{initial_namespace} → {provider.namespace}")
+                    key = _audio_cache_key(provider.namespace, style, text)
+                    path = cache_dir / f"{key}.wav"
+                _write_wav(path, pcm)
+            wav_paths.append(path)
+    else:
+        notify(f"本地 TTS 并发：{effective_workers} 个 worker")
+        namespace = provider.namespace
+        wav_paths = [
+            cache_dir / f"{_audio_cache_key(namespace, style, text)}.wav"
+            for text in chunks
+        ]
+        jobs: dict[Path, tuple[int, str]] = {}
+        for index, (text, path) in enumerate(zip(chunks, wav_paths, strict=True), 1):
+            if _valid_wav(path):
+                hits += 1
+                notify(f"音频分段 {index}/{len(chunks)}：缓存命中")
+            else:
+                misses += 1
+                jobs.setdefault(path, (index, text))
+
+        def synthesize_one(path: Path, text: str) -> Path:
+            _write_wav(path, provider.synthesize(text, style))
+            return path
+
+        futures: dict[Future[Path], tuple[int, str]] = {}
+        with ThreadPoolExecutor(
+            max_workers=effective_workers,
+            thread_name_prefix="local-tts",
+        ) as executor:
+            for path, (index, text) in jobs.items():
+                notify(f"音频分段 {index}/{len(chunks)}：正在合成（{len(text)} 字符）")
+                futures[executor.submit(synthesize_one, path, text)] = (index, text)
+            for future in as_completed(futures):
+                index, _ = futures[future]
+                future.result()
+                notify(f"音频分段 {index}/{len(chunks)}：合成完成")
     notify(f"音频缓存：{hits} 命中，{misses} 条新生成")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     _join_to_mp3(wav_paths, output_path, pause_ms=pause_ms, bitrate=bitrate)
@@ -268,13 +392,24 @@ def _audio_cache_key(namespace: str, style: str, text: str) -> str:
 
 def _write_wav(path: Path, pcm: PCMChunk) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(".tmp.wav")
-    with wave.open(str(temporary), "wb") as output:
-        output.setnchannels(pcm.channels)
-        output.setsampwidth(pcm.sample_width)
-        output.setframerate(pcm.sample_rate)
-        output.writeframes(pcm.data)
-    temporary.replace(path)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            dir=path.parent,
+            prefix=f".{path.stem}.",
+            suffix=".tmp.wav",
+            delete=False,
+        ) as temporary:
+            temporary_path = Path(temporary.name)
+        with wave.open(str(temporary_path), "wb") as output:
+            output.setnchannels(pcm.channels)
+            output.setsampwidth(pcm.sample_width)
+            output.setframerate(pcm.sample_rate)
+            output.writeframes(pcm.data)
+        temporary_path.replace(path)
+    finally:
+        if temporary_path is not None and temporary_path.exists():
+            temporary_path.unlink()
 
 
 def pcm_from_wav(value: bytes) -> PCMChunk:

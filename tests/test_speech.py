@@ -3,7 +3,8 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from ai_trend_radar.models import Item, Trend
-from ai_trend_radar.providers import GeminiSpeechWriter
+from ai_trend_radar.providers import GeminiSpeechWriter, HeuristicSpeechWriter
+from ai_trend_radar.gemini_utils import QuotaAwareModelPool
 
 
 class FakeModels:
@@ -52,6 +53,7 @@ def test_gemini_speech_writer_retries_when_first_draft_is_too_short():
     writer.client = SimpleNamespace(models=models)
     writer.types = SimpleNamespace(GenerateContentConfig=lambda **kwargs: kwargs)
     writer.model = "fake-gemini"
+    writer.pool = QuotaAwareModelPool(["fake-gemini"])
 
     result = writer.write([trend], "zh-CN", 15, "2026-08-20")
 
@@ -76,8 +78,38 @@ def test_gemini_speech_writer_retries_invalid_json():
     writer.client = SimpleNamespace(models=models)
     writer.types = SimpleNamespace(GenerateContentConfig=lambda **kwargs: kwargs)
     writer.model = "fake-gemini"
+    writer.pool = QuotaAwareModelPool(["fake-gemini"])
 
     result = writer.write([trend], "zh-CN", 15, "2026-08-20")
 
     assert models.calls == 2
     assert len(result.content) == 3600
+
+
+def test_heuristic_speech_uses_deep_fields_without_repeated_generic_advice():
+    item = Item(
+        uid="paper:3",
+        source="arXiv",
+        kind="paper",
+        title="Paged KV Scheduling",
+        url="https://arxiv.org/abs/2608.12345",
+        published_at=datetime.now(timezone.utc),
+        metadata={
+            "method_explanation": {
+                "purpose": "降低突发流量下的尾延迟。",
+                "approach": "按页调度 KV block。",
+                "difference": "将驱逐粒度从请求改为页。",
+                "evidence": "在三种 serving trace 上对比连续 batching，并做了页大小消融。",
+                "limitations": "实验只覆盖单机 GPU。",
+                "applicability": "适用于存在 KV 碎片的在线解码负载。",
+                "expert_takeaway": "可复用部分是页级调度器，而非模型结构。",
+            }
+        },
+    )
+    trend = Trend(3, "KV cache scheduling", 3.0, 0.5, 2, 5, 2, [item])
+
+    result = HeuristicSpeechWriter().write([trend], "zh-CN", 15, "2026-08-20")
+
+    assert "实验依据" in result.content
+    assert "单机 GPU" in result.content
+    assert "阅读时建议重点检查" not in result.content

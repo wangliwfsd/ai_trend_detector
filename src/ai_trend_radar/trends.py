@@ -126,3 +126,55 @@ def _item_quality(item: Item, as_of: datetime) -> float:
         - repeat_penalty
         - 0.03 * age_days
     )
+
+
+def arrange_must_reads(trend: Trend, limit: int) -> list[Item]:
+    """Choose one grounded must-read set and put it first for every downstream stage.
+
+    Gemini supplies an on-topic allow-list when available. Within that list we prefer a
+    second independent evidence family (paper, code/release, or engineering article)
+    without admitting an unrelated item merely for diversity.
+    """
+    if limit <= 0:
+        return []
+    by_url = {item.url: item for item in trend.items}
+    eligible = [by_url[url] for url in trend.relevant_urls if url in by_url]
+    if not eligible:
+        eligible = list(trend.items)
+
+    selected: list[Item] = []
+    seen_urls: set[str] = set()
+    if eligible:
+        selected.append(eligible[0])
+        seen_urls.add(eligible[0].url)
+
+    while len(selected) < limit:
+        used_families = {_evidence_family(item) for item in selected}
+        candidate = next(
+            (
+                item
+                for item in eligible
+                if item.url not in seen_urls and _evidence_family(item) not in used_families
+            ),
+            None,
+        )
+        if candidate is None:
+            candidate = next((item for item in eligible if item.url not in seen_urls), None)
+        if candidate is None:
+            break
+        selected.append(candidate)
+        seen_urls.add(candidate.url)
+
+    for item in trend.items:
+        item.metadata["selected_must_read"] = item.url in seen_urls
+    trend.items = selected + [item for item in trend.items if item.url not in seen_urls]
+    return selected
+
+
+def _evidence_family(item: Item) -> str:
+    source = item.source.casefold()
+    if item.kind == "paper" or source in {"arxiv", "hugging face papers"}:
+        return "paper"
+    if item.kind in {"repository", "release"} or "github" in source:
+        return "code"
+    return "engineering"

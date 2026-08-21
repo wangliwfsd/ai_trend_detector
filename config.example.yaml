@@ -50,36 +50,69 @@ embedding:
 llm:
   # Gemini is used for final trend naming, ranking and summarization.
   provider: gemini
-  model: gemini-2.5-flash
+  models: &text_models
+    - gemini-3.7-flash
+    - gemini-3-flash-preview
+    - gemini-2.5-flash
+    - gemini-3.5-flash-lite
   fallback: heuristic
   candidate_trends: 8
 
+deep_reading:
+  # Final must-reads are analyzed from the full arXiv PDF or engineering page body.
+  # One Gemini request per uncached must-read; failures fall back to abstract-level notes.
+  enabled: true
+  provider: gemini
+  models: *text_models
+  cache_dir: data/deep-read-cache
+  max_pdf_bytes: 20000000
+  timeout_seconds: 60
+  # Bounded concurrency: only this many papers and requests per model run at once.
+  max_workers: 2
+  max_in_flight_per_model: 2
+
 speech:
   enabled: true
-  # Uses one dedicated Gemini request after the final 3–5 trends are selected.
+  # Uses one dedicated Gemini request after full-source must-read analysis.
   provider: same_as_llm
-  model: gemini-2.5-flash
+  models: *text_models
   target_minutes: 15
 
 audio:
   enabled: true
-  provider: gemini
-  model: gemini-3.1-flash-tts-preview
-  voice: Charon
+  provider: fallback
+  providers:
+    - provider: gemini
+      model: gemini-3.1-flash-tts-preview
+      voice: Charon
+      retries: 3
+    - provider: gemini
+      model: gemini-2.5-flash-preview-tts
+      voice: Charon
+      retries: 3
+    - provider: local_http
+      base_url: http://127.0.0.1:8880
+      model: kokoro
+      voice: zf_xiaoxiao
+      speed: 1.0
+      timeout_seconds: 300
   style: 语速平稳、清晰、自然，像专业科技播客主播；英文缩写逐字母清楚发音。
   chunk_chars: 700
   pause_ms: 450
   bitrate: 128k
-  retries: 3
   cache_dir: data/audio-cache
   cache_days: 14
+  # Gemini and fallback chains are automatically serialized. A direct local_http
+  # provider may set this to 2 after confirming the local server has enough RAM/VRAM.
+  max_workers: 1
   # To use a local OpenAI-compatible TTS server instead:
   # provider: local_http
   # base_url: http://127.0.0.1:8880
-  # model: tts-1
-  # voice: default
+  # model: kokoro
+  # voice: zf_xiaoxiao
   # speed: 1.0
   # timeout_seconds: 300
+  # max_workers: 2
 
 clustering:
   algorithm: dbscan

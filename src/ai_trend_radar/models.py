@@ -47,6 +47,13 @@ class Trend:
     new_count: int = 0
     summary: str = ""
     why_it_matters: str = ""
+    coherent: bool = True
+    coherence_reason: str = ""
+    evidence_basis: str = ""
+    confidence: str = "medium"
+    counterevidence: str = ""
+    relevant_urls: list[str] = field(default_factory=list)
+    redundant_with_cluster_id: int = -1
 
 
 @dataclass(slots=True)

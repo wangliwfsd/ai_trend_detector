@@ -114,6 +114,8 @@ def audio_only(
     try:
         provider = make_tts_provider(loaded)
         typer.echo(f"TTS provider：{provider.__class__.__name__}")
+        if hasattr(provider, "active"):
+            typer.echo(f"TTS 首选模型：{provider.active.namespace}")
         stats = synthesize_episode(
             spoken_text,
             output_path,
@@ -127,6 +129,7 @@ def audio_only(
             pause_ms=int(audio_config.get("pause_ms", 450)),
             bitrate=audio_config.get("bitrate", "128k"),
             cache_days=int(audio_config.get("cache_days", 14)),
+            max_workers=int(audio_config.get("max_workers", 1)),
             progress=show_progress,
         )
     except Exception as exc:

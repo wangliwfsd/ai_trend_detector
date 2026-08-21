@@ -37,6 +37,10 @@ def render_markdown(
                 "",
                 trend.summary,
                 "",
+                f"**证据与置信度：** {trend.evidence_basis or '当前仅有聚类计数信号'} · {trend.confidence}",
+                "",
+                f"**反证 / 缺口：** {trend.counterevidence or '当前数据未提供独立反证'}",
+                "",
                 f"**为什么重要：** {trend.why_it_matters}",
                 "",
                 "**必读：**",
@@ -59,6 +63,30 @@ def render_markdown(
                 lines.append(f"  - **做什么：** {explanation.get('purpose', '')}")
                 lines.append(f"  - **怎么做：** {explanation.get('approach', '')}")
                 lines.append(f"  - **有什么不同：** {explanation.get('difference', '')}")
+                if explanation.get("evidence"):
+                    lines.append(f"  - **实验与证据：** {explanation['evidence']}")
+                if explanation.get("experimental_setup"):
+                    lines.append(f"  - **实验设置：** {explanation['experimental_setup']}")
+                if explanation.get("baseline_fairness"):
+                    lines.append(f"  - **基线公平性：** {explanation['baseline_fairness']}")
+                if explanation.get("ablations_and_mechanism"):
+                    lines.append(f"  - **消融与机制证据：** {explanation['ablations_and_mechanism']}")
+                if explanation.get("key_evidence"):
+                    lines.append(f"  - **关键证据：** {explanation['key_evidence']}")
+                if explanation.get("unproven_claims"):
+                    lines.append(f"  - **尚未证明：** {explanation['unproven_claims']}")
+                if explanation.get("limitations"):
+                    lines.append(f"  - **局限与证据边界：** {explanation['limitations']}")
+                if explanation.get("applicability"):
+                    lines.append(f"  - **适用范围：** {explanation['applicability']}")
+                if explanation.get("adoption_prerequisites"):
+                    lines.append(f"  - **采用前提：** {explanation['adoption_prerequisites']}")
+                if explanation.get("replication_checks"):
+                    lines.append(f"  - **复现检查：** {explanation['replication_checks']}")
+                if explanation.get("verdict"):
+                    lines.append(f"  - **结论：** {explanation['verdict']}")
+                if explanation.get("expert_takeaway"):
+                    lines.append(f"  - **技术判断：** {explanation['expert_takeaway']}")
             elif explanation:
                 lines.append(f"  - **方法概览：** {explanation}")
         lines.append("")
@@ -75,6 +103,7 @@ def write_reports(
     trends: list[Trend],
     as_of: datetime,
     timezone_name: str,
+    must_reads: int = 2,
 ) -> tuple[Path, Path]:
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
@@ -97,6 +126,9 @@ def write_reports(
                 "new_count": trend.new_count,
                 "summary": trend.summary,
                 "why_it_matters": trend.why_it_matters,
+                "evidence_basis": trend.evidence_basis,
+                "confidence": trend.confidence,
+                "counterevidence": trend.counterevidence,
                 "must_reads": [
                     {
                         "title": item.title,
@@ -104,7 +136,7 @@ def write_reports(
                         "source": item.source,
                         "method_explanation": item.metadata.get("method_explanation", ""),
                     }
-                    for item in trend.items[:2]
+                    for item in trend.items[:must_reads]
                 ],
             }
             for trend in trends
